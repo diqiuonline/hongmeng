@@ -1,0 +1,17 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "AI 对话助手（个人学习与本地测试）"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "AI 对话助手"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "AI 助手"
+
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "DeepSeek HarmonyOS client entry module.",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "@luvi/lv-markdown-in": "^3.4.7"
+  },
+  "devDependencies": {},
+  "dynamicDependencies": {}
+}

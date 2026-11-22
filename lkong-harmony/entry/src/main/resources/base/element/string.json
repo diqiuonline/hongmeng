@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "龙的天空第三方客户端（个人测试）"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "龙空客户端"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "龙空客户端"
+    }
+  ]
+}
