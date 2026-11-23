@@ -4,11 +4,11 @@
   },
   "execution": {
     // "analyze": "normal",                     /* Define the build analyze mode. Value: [ "normal" | "advanced" | "ultrafine" | false ]. Default: "normal" */
-    // "daemon": true,                          /* Enable daemon compilation. Value: [ true | false ]. Default: true */
-    // "incremental": true,                     /* Enable incremental compilation. Value: [ true | false ]. Default: true */
-    // "parallel": true,                        /* Enable parallel compilation. Value: [ true | false ]. Default: true */
+    "daemon": false,                            /* Disable daemon so CLI affinity/priority and memory limits apply cleanly */
+    "incremental": true,                        /* Enable incremental compilation. Value: [ true | false ]. Default: true */
+    "parallel": false,                          /* Disable parallel module/worker burst to avoid saturating CPU */
     // "typeCheck": false,                      /* Enable typeCheck. Value: [ true | false ]. Default: false */
-    // "optimizationStrategy": "memory"         /* Define the optimization strategy. Value: [ "memory" | "performance" ]. Default: "memory" */
+    "optimizationStrategy": "memory"            /* Define the optimization strategy. Value: [ "memory" | "performance" ]. Default: "memory" */
   },
   "logging": {
     // "level": "info"                          /* Define the log level. Value: [ "debug" | "info" | "warn" | "error" ]. Default: "info" */
@@ -17,7 +17,7 @@
     // "stacktrace": false                      /* Disable stacktrace compilation. Value: [ true | false ]. Default: false */
   },
   "nodeOptions": {
-    // "maxOldSpaceSize": 8192                  /* Enable nodeOptions maxOldSpaceSize compilation. Unit M. Used for the daemon process. Default: 8192*/
+    "maxOldSpaceSize": 4096                     /* Enable nodeOptions maxOldSpaceSize compilation. Unit M. Used for the daemon process. Default: 8192*/
     // "exposeGC": true                         /* Enable to trigger garbage collection explicitly. Default: true*/
   }
 }

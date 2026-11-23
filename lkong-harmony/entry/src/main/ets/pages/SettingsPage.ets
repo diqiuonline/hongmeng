@@ -2,6 +2,7 @@ import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
+import { LkongApi } from '../network/LkongApi';
 import { AppConfig } from '../utils/AppConfig';
 import {
   FontSizePreset,
@@ -56,6 +57,7 @@ struct SettingsPage {
   private async clearCookie(): Promise<void> {
     await CookieStore.getInstance().ensureInit(getContext(this) as common.Context);
     await CookieStore.getInstance().clearCookie();
+    LkongApi.getInstance().clearCurrentUser();
     this.cookieSummary = CookieStore.getInstance().maskSummary();
     this.showToast('登录态已清除');
   }

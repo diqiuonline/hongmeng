@@ -196,6 +196,14 @@ function collectTextValues(value: Object, output: string[]): void {
   }
 }
 
+export function renderPostSummary(raw: string, maxLength: number = 140): string {
+  const plain = renderPostContent(raw).replace(/\s+/g, ' ').trim();
+  if (plain.length <= maxLength) {
+    return plain;
+  }
+  return `${plain.slice(0, maxLength)}...`;
+}
+
 export function stripHtml(html: string): string {
   if (html.length === 0) {
     return '（无内容）';

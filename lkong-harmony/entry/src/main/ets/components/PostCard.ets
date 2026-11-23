@@ -1,6 +1,6 @@
 import { LengthMetrics } from '@kit.ArkUI';
 import { BlockKind, InlineKind, PostBlock, PostInline } from '../model/Models';
-import { parsePostBlocks } from '../utils/ContentUtils';
+import { parsePostBlocks, renderPostContent } from '../utils/ContentUtils';
 import {
   FontSizePreset,
   getTheme,
@@ -11,35 +11,69 @@ import {
 import { PostImage } from './PostImage';
 
 /**
- * 楼层卡片。将帖子 JSON/HTML 拆分为标题、段落、引用、代码块、分割线与图片块，
- * 文本、样式与行内表情使用 Text + Span/ImageSpan 混排，图片使用独立 Image 组件。
+ * 楼层卡片。支持富文本、行内表情、自适应图片、引用楼层展示、点击作者进资料页与单楼层收藏。
  */
 @Component
 export struct PostCard {
+  @Prop pid: string = '';
   @Prop floor: string = '';
   @Prop authorName: string = '';
+  @Prop authorId: number = 0;
   @Prop postTime: string = '';
   @Prop @Watch('onContentChange') contentHtml: string = '';
   @Prop isAuthor: boolean = false;
+  @Prop quotePid: string = '';
+  @Prop quoteStatus: string = '';
+  @Prop quoteAuthorId: number = 0;
+  @Prop quoteAuthorName: string = '';
+  @Prop @Watch('onQuoteChange') quoteContentHtml: string = '';
   onImageClick: (url: string) => void = () => {
   };
   onLinkClick: (url: string) => void = () => {
+  };
+  onAuthorClick: (uid: number, name: string) => void = () => {
+  };
+  onFavoriteClick: (pid: string, floor: string) => void = () => {
   };
 
   @StorageProp(KEY_IS_DARK) isDark: boolean = false;
   @StorageProp(KEY_FONT_SIZE) bodyFontSize: number = FontSizePreset.STANDARD;
   @State blocks: PostBlock[] = [];
+  @State quotePlainText: string = '';
+  @State quoteExpanded: boolean = false;
 
   aboutToAppear(): void {
     this.refreshBlocks();
+    this.refreshQuote();
   }
 
   onContentChange(): void {
     this.refreshBlocks();
   }
 
+  onQuoteChange(): void {
+    this.refreshQuote();
+  }
+
   private refreshBlocks(): void {
     this.blocks = parsePostBlocks(this.contentHtml);
+  }
+
+  private refreshQuote(): void {
+    this.quoteExpanded = false;
+    if (this.quoteContentHtml.length === 0) {
+      this.quotePlainText = '';
+      return;
+    }
+    this.quotePlainText = renderPostContent(this.quoteContentHtml).trim();
+  }
+
+  private hasQuote(): boolean {
+    return this.quotePid.length > 0 || this.quoteStatus.length > 0 || this.quoteContentHtml.length > 0;
+  }
+
+  private canToggleQuoteExpand(): boolean {
+    return this.quotePlainText.length > 72 || this.quotePlainText.includes('\n');
   }
 
   private resolveDecoration(inline: PostInline): TextDecorationType {
@@ -115,10 +149,17 @@ export struct PostCard {
         Text(this.authorName.length > 0 ? this.authorName : '匿名用户')
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
-          .fontColor(getTheme(this.isDark).textPrimary)
+          .fontColor(
+            this.authorId > 0 ? getTheme(this.isDark).accent : getTheme(this.isDark).textPrimary
+          )
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
+          .onClick(() => {
+            if (this.authorId > 0) {
+              this.onAuthorClick(this.authorId, this.authorName);
+            }
+          })
         if (this.isAuthor) {
           Text('作者')
             .fontSize(10)
@@ -130,8 +171,77 @@ export struct PostCard {
         Text(this.postTime)
           .fontSize(12)
           .fontColor(getTheme(this.isDark).textMuted)
+        if (this.pid.length > 0) {
+          Text('收藏')
+            .fontSize(11)
+            .fontColor(getTheme(this.isDark).accent)
+            .backgroundColor(getTheme(this.isDark).accentBg)
+            .borderRadius(4)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .onClick(() => {
+              this.onFavoriteClick(this.pid, this.floor);
+            })
+        }
       }
       .width('100%')
+
+      if (this.hasQuote()) {
+        Column({ space: 4 }) {
+          if (this.quoteStatus === 'removed') {
+            Text('该引用楼层已被删除')
+              .fontSize(Math.max(12, this.bodyFontSize - 2))
+              .fontStyle(FontStyle.Italic)
+              .fontColor(getTheme(this.isDark).textMuted)
+          } else {
+            Row({ space: 6 }) {
+              Text(
+                this.quoteAuthorName.length > 0
+                  ? `回复 @${this.quoteAuthorName}`
+                  : '引用楼层'
+              )
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(
+                  this.quoteAuthorId > 0
+                    ? getTheme(this.isDark).accent
+                    : getTheme(this.isDark).textSecondary
+                )
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+                .onClick(() => {
+                  if (this.quoteAuthorId > 0) {
+                    this.onAuthorClick(this.quoteAuthorId, this.quoteAuthorName);
+                  }
+                })
+            }
+            .width('100%')
+
+            Text(this.quotePlainText.length > 0 ? this.quotePlainText : '（无引用文本内容）')
+              .width('100%')
+              .fontSize(Math.max(12, this.bodyFontSize - 2))
+              .lineHeight(Math.round(Math.max(12, this.bodyFontSize - 2) * 1.45))
+              .fontColor(getTheme(this.isDark).textSecondary)
+              .maxLines(this.quoteExpanded ? 100 : 3)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+            if (this.canToggleQuoteExpand()) {
+              Text(this.quoteExpanded ? '收起引用' : '展开引用')
+                .fontSize(11)
+                .fontColor(getTheme(this.isDark).accent)
+                .onClick(() => {
+                  this.quoteExpanded = !this.quoteExpanded;
+                })
+            }
+          }
+        }
+        .width('100%')
+        .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+        .backgroundColor(getTheme(this.isDark).quoteBg)
+        .border({ width: { left: 3 }, color: getTheme(this.isDark).quoteBorder })
+        .borderRadius(6)
+        .alignItems(HorizontalAlign.Start)
+      }
 
       Column({ space: 8 }) {
         ForEach(this.blocks, (block: PostBlock, bIdx: number) => {

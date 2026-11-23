@@ -95,6 +95,20 @@ struct ForumPage {
     });
   }
 
+  private openUserProfile(uid: number, name: string): void {
+    if (uid <= 0) {
+      return;
+    }
+    router.pushUrl({
+      url: 'pages/UserProfilePage',
+      params: {
+        uid: uid,
+        name: name
+      }
+    }).catch(() => {
+    });
+  }
+
   private previousPage(): void {
     if (this.page > 1) {
       this.page = this.page - 1;
@@ -195,6 +209,7 @@ struct ForumPage {
               ThreadRow({
                 title: thread.title,
                 authorName: thread.authorName,
+                authorId: thread.authorId,
                 replyCount: thread.replyCount,
                 viewCount: thread.viewCount,
                 lastPostTime: formatTime(thread.lastPostTime),
@@ -202,6 +217,9 @@ struct ForumPage {
                 isTop: thread.isTop,
                 onOpen: () => {
                   this.openThread(thread);
+                },
+                onAuthorClick: (uid: number, name: string) => {
+                  this.openUserProfile(uid, name);
                 }
               })
             }

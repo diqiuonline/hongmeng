@@ -21,6 +21,8 @@ export interface ThreadSummary {
   lastPostTime: string;
   isDigest: boolean;
   isTop: boolean;
+  forumName: string;
+  fid: number;
 }
 
 export interface ThreadDetail {
@@ -33,6 +35,15 @@ export interface ThreadDetail {
   viewCount: number;
   forumName: string;
   fid: number;
+  firstPid: string;
+}
+
+export interface PostQuote {
+  pid: string;
+  status: string;
+  authorId: number;
+  authorName: string;
+  contentHtml: string;
 }
 
 export interface PostItem {
@@ -44,6 +55,134 @@ export interface PostItem {
   contentHtml: string;
   subject: string;
   isAuthor: boolean;
+  quote: PostQuote | null;
+}
+
+export interface CurrentUser {
+  uid: number;
+  name: string;
+  avatar: string;
+}
+
+export interface HomeData {
+  me: CurrentUser;
+  forums: Forum[];
+}
+
+export interface HotThread {
+  tid: number;
+  title: string;
+  authorName: string;
+  authorId: number;
+}
+
+export interface HighlightSegment {
+  text: string;
+  highlight: boolean;
+}
+
+export interface SearchThreadItem {
+  tid: number;
+  rawTitle: string;
+  plainTitle: string;
+  fid: number;
+  forumName: string;
+  authorId: number;
+  authorName: string;
+  dateline: string;
+  replyCount: number;
+  viewCount: number;
+}
+
+export interface SearchThreadsResult {
+  threads: SearchThreadItem[];
+  searchAfter: string;
+  hasMore: boolean;
+}
+
+export interface SearchForumItem {
+  fid: number;
+  name: string;
+  avatarUrl: string;
+  followers: number;
+  threads: number;
+  isFollow: boolean;
+}
+
+export interface SearchUserItem {
+  uid: number;
+  name: string;
+  avatarUrl: string;
+  followers: number;
+  isFollow: boolean;
+  verifyInfo: string;
+  verifyType: string;
+}
+
+export interface UserProfile {
+  uid: number;
+  name: string;
+  avatarUrl: string;
+  dateline: string;
+  points: number;
+  gender: number;
+  status: number;
+  adminLevel: number;
+  isFollow: boolean;
+  verifyInfo: string;
+  verifyType: string;
+  followings: number;
+  followers: number;
+  digests: number;
+  posts: number;
+  threads: number;
+  money: number;
+  gems: number;
+  levelName: string;
+  levelColor: string;
+  levelNum: number;
+}
+
+export interface UserProfilePageData {
+  profile: UserProfile;
+  threads: ThreadSummary[];
+  page: number;
+}
+
+export interface FavoriteGroup {
+  id: number;
+  title: string;
+  count: number;
+  uid: number;
+  isPublic: boolean;
+  description: string;
+  dateline: string;
+}
+
+export interface FavoriteGroupOption {
+  id: number;
+  title: string;
+  isPublic: boolean;
+  hasFavorited: boolean;
+}
+
+export interface FavoriteEntry {
+  pid: string;
+  tid: number;
+  title: string;
+  forumName: string;
+  fid: number;
+  authorId: number;
+  authorName: string;
+  dateline: string;
+  contentHtml: string;
+  typeName: string;
+}
+
+export interface FavoriteGroupDetailData {
+  group: FavoriteGroup;
+  items: FavoriteEntry[];
+  page: number;
 }
 
 export interface ForumPageData {

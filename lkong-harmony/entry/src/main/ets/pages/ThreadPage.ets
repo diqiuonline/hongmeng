@@ -1,7 +1,7 @@
 import { promptAction, router } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
-import { ApiError, ErrorKind, PostItem } from '../model/Models';
+import { ApiError, ErrorKind, FavoriteGroupOption, PostItem } from '../model/Models';
 import { LkongApi } from '../network/LkongApi';
 import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
@@ -30,8 +30,7 @@ interface ThreadParams {
 }
 
 /**
- * 帖子详情页：原生列表展示楼层，支持只看作者、快速跳页、字号快捷调节、富文本与图片预览。
- * 不做 HTML 注入，也不需要在 List 中嵌套大量 Web 组件。
+ * 帖子详情页：原生列表展示楼层，支持只看作者、快速跳页、字号快捷调节、引用楼层、云端收藏夹与图片预览。
  */
 @Entry
 @Component
@@ -45,6 +44,7 @@ struct ThreadPage {
   @State replyCount: number = 0;
   @State viewCount: number = 0;
   @State forumName: string = '';
+  @State firstPid: string = '';
   @State page: number = 1;
   @State posts: PostItem[] = [];
   @State loading: boolean = true;
@@ -59,6 +59,20 @@ struct ThreadPage {
   @State previewImageUrl: string = '';
   @State activeLinkUrl: string = '';
 
+  // 云端收藏弹窗状态
+  @State showFavoriteModal: boolean = false;
+  @State favTargetPid: string = '';
+  @State favTargetLabel: string = '';
+  @State favGroups: FavoriteGroupOption[] = [];
+  @State favLoading: boolean = false;
+  @State favError: string = '';
+  @State favSubmittingId: number = 0;
+  @State showCreateGroupForm: boolean = false;
+  @State newGroupTitle: string = '';
+  @State newGroupDesc: string = '';
+  @State newGroupPublic: boolean = true;
+  @State creatingGroup: boolean = false;
+
   @StorageProp(KEY_IS_DARK) isDark: boolean = false;
   @StorageProp(KEY_FONT_SIZE) bodyFontSize: number = FontSizePreset.STANDARD;
 
@@ -69,6 +83,10 @@ struct ThreadPage {
     }
     if (this.activeLinkUrl.length > 0) {
       this.activeLinkUrl = '';
+      return true;
+    }
+    if (this.showFavoriteModal) {
+      this.showFavoriteModal = false;
       return true;
     }
     if (this.showJumpModal) {
@@ -129,6 +147,9 @@ struct ThreadPage {
       this.replyCount = data.thread.replyCount;
       this.viewCount = data.thread.viewCount;
       this.forumName = data.thread.forumName;
+      if (data.thread.firstPid.length > 0) {
+        this.firstPid = data.thread.firstPid;
+      }
       this.posts = data.posts;
       if (this.onlyAuthor) {
         this.hasMore = data.posts.length >= POSTS_PER_PAGE;
@@ -165,6 +186,20 @@ struct ThreadPage {
 
   private goLogin(): void {
     router.pushUrl({ url: 'pages/LoginPage' }).catch(() => {
+    });
+  }
+
+  private openUserProfile(uid: number, name: string): void {
+    if (uid <= 0) {
+      return;
+    }
+    router.pushUrl({
+      url: 'pages/UserProfilePage',
+      params: {
+        uid: uid,
+        name: name
+      }
+    }).catch(() => {
     });
   }
 
@@ -223,6 +258,147 @@ struct ThreadPage {
       this.activeLinkUrl = '';
     } catch (error) {
       this.showToast('复制失败，请稍后重试');
+    }
+  }
+
+  private openFavoriteModal(rawPid: string, label: string): void {
+    if (!CookieStore.getInstance().hasCookie()) {
+      this.showToast('请先登录后再收藏');
+      this.goLogin();
+      return;
+    }
+    let pid = rawPid;
+    if (pid.length === 0 && this.page === 1 && this.posts.length > 0) {
+      pid = this.posts[0].pid;
+    }
+    if (pid.length === 0) {
+      this.showToast('请先回到第 1 页或刷新后再收藏');
+      return;
+    }
+    this.favTargetPid = pid;
+    this.favTargetLabel = label;
+    this.favGroups = [];
+    this.favError = '';
+    this.favSubmittingId = 0;
+    this.showCreateGroupForm = false;
+    this.newGroupTitle = '';
+    this.newGroupDesc = '';
+    this.newGroupPublic = true;
+    this.showFavoriteModal = true;
+    this.loadFavoriteGroups();
+  }
+
+  private async loadFavoriteGroups(): Promise<void> {
+    this.favLoading = true;
+    this.favError = '';
+    try {
+      const list = await LkongApi.getInstance().getMyFavoriteGroupList(this.tid, this.favTargetPid);
+      this.favGroups = list;
+      if (list.length === 0) {
+        this.showCreateGroupForm = true;
+      }
+    } catch (error) {
+      if (error instanceof ApiError) {
+        this.favError = error.message;
+      } else {
+        this.favError = '加载云端收藏夹失败，请稍后重试。';
+      }
+    } finally {
+      this.favLoading = false;
+    }
+  }
+
+  private async toggleGroupFavorite(option: FavoriteGroupOption): Promise<void> {
+    if (this.favSubmittingId !== 0 || this.creatingGroup) {
+      return;
+    }
+    const targetUndo = option.hasFavorited;
+    this.favSubmittingId = option.id;
+    try {
+      const ok = await LkongApi.getInstance().favoritePost(
+        option.id,
+        this.tid,
+        this.favTargetPid,
+        targetUndo
+      );
+      if (ok) {
+        const nextList: FavoriteGroupOption[] = [];
+        for (const item of this.favGroups) {
+          if (item.id === option.id) {
+            nextList.push({
+              id: item.id,
+              title: item.title,
+              isPublic: item.isPublic,
+              hasFavorited: !targetUndo
+            });
+          } else {
+            nextList.push(item);
+          }
+        }
+        this.favGroups = nextList;
+        this.showToast(targetUndo ? `已从「${option.title}」移出` : `已收藏到「${option.title}」`);
+      } else {
+        this.showToast('操作未生效，请稍后重试');
+      }
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : '操作失败，请稍后重试。';
+      this.showToast(message);
+    } finally {
+      this.favSubmittingId = 0;
+    }
+  }
+
+  private async submitCreateGroup(): Promise<void> {
+    const title = this.newGroupTitle.trim();
+    if (title.length === 0) {
+      this.showToast('请输入收藏夹名称');
+      return;
+    }
+    if (this.creatingGroup || this.favSubmittingId !== 0) {
+      return;
+    }
+    this.creatingGroup = true;
+    try {
+      const created = await LkongApi.getInstance().createFavoriteGroup(
+        title,
+        this.newGroupDesc.trim(),
+        this.newGroupPublic
+      );
+      if (created.id <= 0) {
+        this.showToast('创建收藏夹失败');
+        return;
+      }
+      let favorited = false;
+      try {
+        favorited = await LkongApi.getInstance().favoritePost(
+          created.id,
+          this.tid,
+          this.favTargetPid,
+          false
+        );
+      } catch (favErr) {
+        favorited = false;
+      }
+      const nextList: FavoriteGroupOption[] = [];
+      for (const item of this.favGroups) {
+        nextList.push(item);
+      }
+      nextList.push({
+        id: created.id,
+        title: created.title.length > 0 ? created.title : title,
+        isPublic: created.isPublic,
+        hasFavorited: favorited
+      });
+      this.favGroups = nextList;
+      this.newGroupTitle = '';
+      this.newGroupDesc = '';
+      this.showCreateGroupForm = false;
+      this.showToast(favorited ? `已新建「${title}」并完成收藏` : `已新建「${title}」，点击即可收藏`);
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : '新建收藏夹失败，请稍后重试。';
+      this.showToast(message);
+    } finally {
+      this.creatingGroup = false;
     }
   }
 
@@ -351,17 +527,22 @@ struct ThreadPage {
                 Row({ space: 8 }) {
                   Text(this.authorName.length > 0 ? this.authorName : '匿名用户')
                     .fontSize(12)
-                    .fontColor(getTheme(this.isDark).textSecondary)
+                    .fontColor(
+                      this.authorId > 0 ? getTheme(this.isDark).accent : getTheme(this.isDark).textSecondary
+                    )
                     .layoutWeight(1)
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .onClick(() => {
+                      this.openUserProfile(this.authorId, this.authorName);
+                    })
                   Text(formatTime(this.postTime))
                     .fontSize(12)
                     .fontColor(getTheme(this.isDark).textMuted)
                 }
                 .width('100%')
 
-                Row({ space: 10 }) {
+                Row({ space: 8 }) {
                   Text(`回复 ${this.replyCount}`)
                     .fontSize(12)
                     .fontColor(getTheme(this.isDark).textMuted)
@@ -374,8 +555,18 @@ struct ThreadPage {
                       .fontColor(getTheme(this.isDark).textMuted)
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .constraintSize({ maxWidth: 96 })
                   }
                   Blank()
+                  Button('收藏主题')
+                    .fontSize(11)
+                    .height(26)
+                    .padding({ left: 10, right: 10 })
+                    .backgroundColor(getTheme(this.isDark).accentBg)
+                    .fontColor(getTheme(this.isDark).accent)
+                    .onClick(() => {
+                      this.openFavoriteModal(this.firstPid, '主题主楼');
+                    })
                   if (this.authorId > 0) {
                     Button(this.onlyAuthor ? '查看全部' : '只看作者')
                       .fontSize(11)
@@ -411,22 +602,36 @@ struct ThreadPage {
             ForEach(this.posts, (post: PostItem, index: number) => {
               ListItem() {
                 PostCard({
+                  pid: post.pid,
                   floor: post.floor,
                   authorName: post.authorName,
+                  authorId: post.authorId,
                   postTime: formatTime(post.postTime),
                   contentHtml: post.contentHtml,
                   isAuthor: post.isAuthor,
+                  quotePid: post.quote !== null ? post.quote.pid : '',
+                  quoteStatus: post.quote !== null ? post.quote.status : '',
+                  quoteAuthorId: post.quote !== null ? post.quote.authorId : 0,
+                  quoteAuthorName: post.quote !== null ? post.quote.authorName : '',
+                  quoteContentHtml: post.quote !== null ? post.quote.contentHtml : '',
                   onImageClick: (url: string) => {
                     this.previewImageUrl = url;
                   },
                   onLinkClick: (url: string) => {
                     this.activeLinkUrl = url;
+                  },
+                  onAuthorClick: (uid: number, name: string) => {
+                    this.openUserProfile(uid, name);
+                  },
+                  onFavoriteClick: (pid: string, floor: string) => {
+                    const label = floor.length > 0 ? `第 ${floor} 楼` : '该楼层';
+                    this.openFavoriteModal(pid, label);
                   }
                 })
               }
             }, (post: PostItem, index: number) =>
               post.pid.length > 0
-                ? `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.pid}`
+                ? `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.pid}_${post.quote !== null ? 'q' : 'nq'}`
                 : `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.floor}_${index}`
             )
           }
@@ -475,6 +680,238 @@ struct ThreadPage {
       .width('100%')
       .height('100%')
       .backgroundColor(getTheme(this.isDark).pageBg)
+
+      if (this.showFavoriteModal) {
+        Column() {
+          Column({ space: 12 }) {
+            Row() {
+              Column({ space: 2 }) {
+                Text('收藏到云端分组')
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(getTheme(this.isDark).textPrimary)
+                Text(`目标：${this.favTargetLabel}`)
+                  .fontSize(12)
+                  .fontColor(getTheme(this.isDark).textSecondary)
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+
+              Button('刷新')
+                .fontSize(12)
+                .height(28)
+                .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                .fontColor(getTheme(this.isDark).textPrimary)
+                .onClick(() => {
+                  this.loadFavoriteGroups();
+                })
+            }
+            .width('100%')
+
+            if (this.favLoading) {
+              Row({ space: 8 }) {
+                LoadingProgress()
+                  .width(24)
+                  .height(24)
+                  .color(getTheme(this.isDark).accent)
+                Text('正在获取云端收藏夹...')
+                  .fontSize(13)
+                  .fontColor(getTheme(this.isDark).textSecondary)
+              }
+              .width('100%')
+              .padding({ top: 12, bottom: 12 })
+              .justifyContent(FlexAlign.Center)
+            } else if (this.favError.length > 0) {
+              Column({ space: 8 }) {
+                Text(this.favError)
+                  .fontSize(13)
+                  .fontColor(getTheme(this.isDark).dangerText)
+                Button('重试')
+                  .fontSize(12)
+                  .height(30)
+                  .backgroundColor(getTheme(this.isDark).accentBg)
+                  .fontColor(getTheme(this.isDark).accent)
+                  .onClick(() => {
+                    this.loadFavoriteGroups();
+                  })
+              }
+              .width('100%')
+              .padding({ top: 8, bottom: 8 })
+              .alignItems(HorizontalAlign.Center)
+            } else {
+              if (this.favGroups.length === 0) {
+                Text('你还没有云端收藏夹，请先在下方新建。')
+                  .fontSize(13)
+                  .fontColor(getTheme(this.isDark).textSecondary)
+                  .padding({ top: 6, bottom: 6 })
+              } else {
+                Scroll() {
+                  Column({ space: 8 }) {
+                    ForEach(this.favGroups, (group: FavoriteGroupOption) => {
+                      Row({ space: 8 }) {
+                        Column({ space: 2 }) {
+                          Text(group.title)
+                            .fontSize(14)
+                            .fontWeight(FontWeight.Medium)
+                            .fontColor(getTheme(this.isDark).textPrimary)
+                            .maxLines(1)
+                            .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          Text(group.isPublic ? '公开' : '私密')
+                            .fontSize(11)
+                            .fontColor(getTheme(this.isDark).textMuted)
+                        }
+                        .layoutWeight(1)
+                        .alignItems(HorizontalAlign.Start)
+
+                        Button(
+                          this.favSubmittingId === group.id
+                            ? '处理中'
+                            : (group.hasFavorited ? '已收藏' : '收藏')
+                        )
+                          .fontSize(12)
+                          .height(30)
+                          .backgroundColor(
+                            group.hasFavorited
+                              ? getTheme(this.isDark).accentSolid
+                              : getTheme(this.isDark).accentBg
+                          )
+                          .fontColor(
+                            group.hasFavorited
+                              ? Color.White
+                              : getTheme(this.isDark).accent
+                          )
+                          .enabled(this.favSubmittingId === 0 && !this.creatingGroup)
+                          .onClick(() => {
+                            this.toggleGroupFavorite(group);
+                          })
+                      }
+                      .width('100%')
+                      .padding(10)
+                      .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                      .borderRadius(8)
+                    }, (group: FavoriteGroupOption) =>
+                      `${this.isDark ? 'd' : 'l'}_${group.id}_${group.hasFavorited ? '1' : '0'}_${this.favSubmittingId}`
+                    )
+                  }
+                  .width('100%')
+                }
+                .constraintSize({ maxHeight: 220 })
+              }
+
+              Button(this.showCreateGroupForm ? '收起新建表单' : '+ 新建云端收藏夹')
+                .fontSize(12)
+                .height(32)
+                .width('100%')
+                .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                .fontColor(getTheme(this.isDark).accent)
+                .onClick(() => {
+                  this.showCreateGroupForm = !this.showCreateGroupForm;
+                })
+
+              if (this.showCreateGroupForm) {
+                Column({ space: 8 }) {
+                  TextInput({
+                    placeholder: '收藏夹名称（必填）',
+                    text: this.newGroupTitle
+                  })
+                    .height(38)
+                    .fontSize(13)
+                    .fontColor(getTheme(this.isDark).textPrimary)
+                    .placeholderColor(getTheme(this.isDark).textMuted)
+                    .backgroundColor(getTheme(this.isDark).inputBg)
+                    .onChange((val: string) => {
+                      this.newGroupTitle = val;
+                    })
+                  TextInput({
+                    placeholder: '简介（选填）',
+                    text: this.newGroupDesc
+                  })
+                    .height(38)
+                    .fontSize(13)
+                    .fontColor(getTheme(this.isDark).textPrimary)
+                    .placeholderColor(getTheme(this.isDark).textMuted)
+                    .backgroundColor(getTheme(this.isDark).inputBg)
+                    .onChange((val: string) => {
+                      this.newGroupDesc = val;
+                    })
+                  Row({ space: 8 }) {
+                    Text('可见性：')
+                      .fontSize(12)
+                      .fontColor(getTheme(this.isDark).textSecondary)
+                    Button('公开')
+                      .fontSize(12)
+                      .height(28)
+                      .backgroundColor(
+                        this.newGroupPublic
+                          ? getTheme(this.isDark).accentSolid
+                          : getTheme(this.isDark).surfaceMuted
+                      )
+                      .fontColor(this.newGroupPublic ? Color.White : getTheme(this.isDark).textPrimary)
+                      .onClick(() => {
+                        this.newGroupPublic = true;
+                      })
+                    Button('私密')
+                      .fontSize(12)
+                      .height(28)
+                      .backgroundColor(
+                        !this.newGroupPublic
+                          ? getTheme(this.isDark).accentSolid
+                          : getTheme(this.isDark).surfaceMuted
+                      )
+                      .fontColor(!this.newGroupPublic ? Color.White : getTheme(this.isDark).textPrimary)
+                      .onClick(() => {
+                        this.newGroupPublic = false;
+                      })
+                    Blank()
+                    Button(this.creatingGroup ? '创建中...' : '创建并收藏')
+                      .fontSize(12)
+                      .height(30)
+                      .backgroundColor(
+                        this.creatingGroup
+                          ? getTheme(this.isDark).disabledBtnBg
+                          : getTheme(this.isDark).accentSolid
+                      )
+                      .fontColor(this.creatingGroup ? getTheme(this.isDark).disabledBtnText : Color.White)
+                      .enabled(!this.creatingGroup)
+                      .onClick(() => {
+                        this.submitCreateGroup();
+                      })
+                  }
+                  .width('100%')
+                }
+                .width('100%')
+                .padding(10)
+                .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                .borderRadius(8)
+              }
+            }
+
+            Button('关闭')
+              .fontSize(13)
+              .height(34)
+              .width('100%')
+              .backgroundColor(getTheme(this.isDark).surfaceMuted)
+              .fontColor(getTheme(this.isDark).textSecondary)
+              .onClick(() => {
+                this.showFavoriteModal = false;
+              })
+          }
+          .width('88%')
+          .padding(16)
+          .backgroundColor(getTheme(this.isDark).cardBg)
+          .borderRadius(14)
+          .alignItems(HorizontalAlign.Start)
+          .onClick(() => {
+          })
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#80000000')
+        .justifyContent(FlexAlign.Center)
+        .onClick(() => {
+          this.showFavoriteModal = false;
+        })
+      }
 
       if (this.showJumpModal) {
         Column() {

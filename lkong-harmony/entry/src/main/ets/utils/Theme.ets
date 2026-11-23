@@ -46,6 +46,8 @@ export interface ThemePalette {
   inputBg: string;
   disabledBtnBg: string;
   disabledBtnText: string;
+  tabBarBg: string;
+  highlightText: string;
 }
 
 const LIGHT_THEME: ThemePalette = {
@@ -73,7 +75,9 @@ const LIGHT_THEME: ThemePalette = {
   dangerText: '#C62828',
   inputBg: '#F5F6F8',
   disabledBtnBg: '#E5E8EE',
-  disabledBtnText: '#9AA0A6'
+  disabledBtnText: '#9AA0A6',
+  tabBarBg: '#FFFFFF',
+  highlightText: '#D93025'
 };
 
 const DARK_THEME: ThemePalette = {
@@ -101,7 +105,9 @@ const DARK_THEME: ThemePalette = {
   dangerText: '#EF9A9A',
   inputBg: '#262830',
   disabledBtnBg: '#2A2C33',
-  disabledBtnText: '#6F7580'
+  disabledBtnText: '#6F7580',
+  tabBarBg: '#1A1B20',
+  highlightText: '#FF7B72'
 };
 
 export function getTheme(isDark: boolean): ThemePalette {
