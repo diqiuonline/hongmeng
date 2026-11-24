@@ -12,13 +12,7 @@
           "strictMode": {
             "caseSensitiveCheck": true,
             "useNormalizedOHMUrl": true
-          },
-          "nativeLib": {
-            "filter": {
-              "excludes": [
-                "**/x86_64/**"
-              ]
-            }
+
           }
         }
       }

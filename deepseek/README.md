@@ -95,7 +95,7 @@ deepseek/
 │  └─ rebuild_and_sign.py              # Release 构建与发布签名脚本
 ├─ sign/
 │  └─ README.md                        # AGC 发布证书与内测流程
-├─ build-profile.json5                 # API 26、仅打包 arm64-v8a
+├─ build-profile.json5                 # API 26；调试含 arm64 + x86_64，发版须排除 x86_64
 └─ hvigorfile.ts
 ```
 
@@ -112,20 +112,29 @@ deepseek/
 cd entry
 ohpm install
 
-# 2. 构建 Debug HAP（仅 arm64 真机；模拟器需临时移除 x86_64 排除配置）
+# 2. 构建 Debug HAP（当前含 arm64 + x86_64，可直接装真机或模拟器）
 cd ..
 devecocli build --product default --build-mode debug
 
-# 3. 构建 Release APP
+# 3. 发版前先恢复 x86_64 排除（见 4.2），再构建 Release APP
 devecocli build --product default --build-mode release
 ```
 
-### 4.2 包体积与 ABI
+### 4.2 ABI 与包体积
 
-- `build-profile.json5` 的产品级 `buildOption.nativeLib.filter.excludes` 已排除 `**/x86_64/**`，Release 包只包含 `arm64-v8a`；
-- 当前下载包约 **6.2 MB**，HAP 解压约 **18.2 MB**；
-- 体积主要来自 `@luvi/lv-markdown-in` 依赖的 LaTeX / 代码高亮原生库（`liblatex.so`、`libcangjie-*`、`libc++_shared.so` 等），业务字节码仅约 1 MB；
-- 如需在 x86_64 模拟器调试，临时移除 `nativeLib.filter.excludes` 中的 `**/x86_64/**` 后重新构建。
+- **调试**：`build-profile.json5` 不排除任何架构，Debug HAP 同时包含 `arm64-v8a` 与 `x86_64`，约 **30 MB**，可直接安装到 x86_64 模拟器或 arm64 真机；
+- **发版**：Release 打包前**必须**在 `app.products[0].buildOption.nativeLib.filter.excludes` 中恢复 `"**/x86_64/**"`，签名包只保留 `arm64-v8a`：
+
+  ```json5
+  "nativeLib": {
+    "filter": {
+      "excludes": ["**/x86_64/**"]
+    }
+  }
+  ```
+
+- 单架构 Release 下载包约 **6.2 MB**，HAP 解压约 **18.2 MB**；
+- 体积主要来自 `@luvi/lv-markdown-in` 依赖的 LaTeX / 代码高亮原生库（`liblatex.so`、`libcangjie-*`、`libc++_shared.so` 等），业务字节码仅约 1 MB。
 
 ### 4.3 不开启开发者模式的真机部署（AGC 仅测试）
 
