@@ -2,7 +2,7 @@
 """
 Low-CPU HarmonyOS build runner for lkong-harmony.
 
-Applies Windows CPU affinity mask (default: 6 cores -> 0x3F) and low process priority
+Applies Windows CPU affinity mask (default: 4 cores -> 0x0F) and low process priority
 to the current Python process before spawning hvigorw/node/java child processes, so
 the entire compilation tree inherits the CPU cap without starving interactive work.
 """
@@ -28,7 +28,7 @@ PRIORITY_FLAGS = {
 }
 
 
-def apply_low_cpu_limits(cores: int = 6, priority: str = 'low') -> tuple[int, int]:
+def apply_low_cpu_limits(cores: int = 4, priority: str = 'low') -> tuple[int, int]:
     """Limit the current process (and future child processes) to N CPU cores and low priority."""
     cpu_total = os.cpu_count() or cores
     effective_cores = max(1, min(cores, cpu_total))
@@ -91,7 +91,7 @@ def stop_hvigor_daemons() -> None:
 def run_hvigor_build(
     mode: str = 'debug',
     product: str = 'default',
-    cores: int = 6,
+    cores: int = 4,
     priority: str = 'low',
     stop_daemon: bool = False,
 ) -> None:
@@ -140,8 +140,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--cores',
         type=int,
-        default=6,
-        help='Maximum CPU threads/cores to allow (default: 6)',
+        default=4,
+        help='Maximum CPU threads/cores to allow (default: 4)',
     )
     parser.add_argument(
         '--priority',

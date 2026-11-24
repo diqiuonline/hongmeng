@@ -1,6 +1,7 @@
 import { LengthMetrics } from '@kit.ArkUI';
-import { BlockKind, InlineKind, PostBlock, PostInline } from '../model/Models';
-import { parsePostBlocks, renderPostContent } from '../utils/ContentUtils';
+import { BlockKind, InlineKind, PostBlock, PostInline, PostRateItem } from '../model/Models';
+import { parsePostBlocks, renderPostContent, renderPostSummary } from '../utils/ContentUtils';
+import { formatTime } from '../utils/TimeUtils';
 import {
   FontSizePreset,
   getTheme,
@@ -11,7 +12,7 @@ import {
 import { PostImage } from './PostImage';
 
 /**
- * 楼层卡片。支持富文本、行内表情、自适应图片、引用楼层展示、点击作者进资料页与单楼层收藏。
+ * 楼层卡片。支持富文本、行内表情、自适应图片、引用楼层展示、楼层评分展示与交互、点击作者进资料页、引用回复与单楼层收藏。
  */
 @Component
 export struct PostCard {
@@ -27,6 +28,11 @@ export struct PostCard {
   @Prop quoteAuthorId: number = 0;
   @Prop quoteAuthorName: string = '';
   @Prop @Watch('onQuoteChange') quoteContentHtml: string = '';
+  @Prop @Watch('onRatesChange') rates: PostRateItem[] = [];
+  @Prop isHighlighted: boolean = false;
+  @Prop canReply: boolean = true;
+  @Prop canRate: boolean = true;
+  @Prop canFavorite: boolean = true;
   onImageClick: (url: string) => void = () => {
   };
   onLinkClick: (url: string) => void = () => {
@@ -35,16 +41,22 @@ export struct PostCard {
   };
   onFavoriteClick: (pid: string, floor: string) => void = () => {
   };
+  onReplyClick: (pid: string, floor: string, authorName: string, summary: string) => void = () => {
+  };
+  onRateClick: (pid: string, floor: string, authorName: string) => void = () => {
+  };
 
   @StorageProp(KEY_IS_DARK) isDark: boolean = false;
   @StorageProp(KEY_FONT_SIZE) bodyFontSize: number = FontSizePreset.STANDARD;
   @State blocks: PostBlock[] = [];
   @State quotePlainText: string = '';
   @State quoteExpanded: boolean = false;
+  @State ratesExpanded: boolean = false;
 
   aboutToAppear(): void {
     this.refreshBlocks();
     this.refreshQuote();
+    this.ratesExpanded = this.rates.length > 0 && this.rates.length <= 3;
   }
 
   onContentChange(): void {
@@ -53,6 +65,20 @@ export struct PostCard {
 
   onQuoteChange(): void {
     this.refreshQuote();
+  }
+
+  onRatesChange(): void {
+    if (this.rates.length > 0) {
+      this.ratesExpanded = true;
+    }
+  }
+
+  private totalRateCoins(): number {
+    let total = 0;
+    for (const rate of this.rates) {
+      total += rate.num;
+    }
+    return total;
   }
 
   private refreshBlocks(): void {
@@ -171,17 +197,6 @@ export struct PostCard {
         Text(this.postTime)
           .fontSize(12)
           .fontColor(getTheme(this.isDark).textMuted)
-        if (this.pid.length > 0) {
-          Text('收藏')
-            .fontSize(11)
-            .fontColor(getTheme(this.isDark).accent)
-            .backgroundColor(getTheme(this.isDark).accentBg)
-            .borderRadius(4)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            .onClick(() => {
-              this.onFavoriteClick(this.pid, this.floor);
-            })
-        }
       }
       .width('100%')
 
@@ -316,10 +331,129 @@ export struct PostCard {
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
+
+      if (this.rates.length > 0) {
+        Column({ space: 6 }) {
+          Row({ space: 8 }) {
+            Text(`共 ${this.rates.length} 条评分，共 ${this.totalRateCoins()} 龙币`)
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(getTheme(this.isDark).textSecondary)
+              .layoutWeight(1)
+            Text(this.ratesExpanded ? '收起' : '展开')
+              .fontSize(12)
+              .fontColor(getTheme(this.isDark).accent)
+              .onClick(() => {
+                this.ratesExpanded = !this.ratesExpanded;
+              })
+          }
+          .width('100%')
+
+          if (this.ratesExpanded) {
+            ForEach(this.rates, (rate: PostRateItem, rIdx: number) => {
+              Row({ space: 6 }) {
+                Text(rate.userName.length > 0 ? rate.userName : '匿名用户')
+                  .fontSize(12)
+                  .fontColor(
+                    rate.userId > 0 ? getTheme(this.isDark).accent : getTheme(this.isDark).textPrimary
+                  )
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .constraintSize({ maxWidth: 100 })
+                  .onClick(() => {
+                    if (rate.userId > 0) {
+                      this.onAuthorClick(rate.userId, rate.userName);
+                    }
+                  })
+                Text(`${rate.num > 0 ? '+' : ''}${rate.num} 龙币`)
+                  .fontSize(11)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(
+                    rate.num >= 0 ? getTheme(this.isDark).successText : getTheme(this.isDark).dangerText
+                  )
+                  .backgroundColor(
+                    rate.num >= 0 ? getTheme(this.isDark).successBg : getTheme(this.isDark).dangerBg
+                  )
+                  .borderRadius(4)
+                  .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+                if (rate.reason.length > 0) {
+                  Text(rate.reason)
+                    .fontSize(12)
+                    .fontColor(getTheme(this.isDark).textSecondary)
+                    .layoutWeight(1)
+                    .maxLines(2)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                } else {
+                  Blank()
+                }
+                if (rate.dateline.length > 0) {
+                  Text(formatTime(rate.dateline))
+                    .fontSize(11)
+                    .fontColor(getTheme(this.isDark).textMuted)
+                }
+              }
+              .width('100%')
+            }, (rate: PostRateItem, rIdx: number) =>
+              `${this.isDark ? 'd' : 'l'}_rate_${this.pid}_${rate.id}_${rIdx}`
+            )
+          }
+        }
+        .width('100%')
+        .padding(10)
+        .backgroundColor(getTheme(this.isDark).surfaceMuted)
+        .borderRadius(8)
+        .alignItems(HorizontalAlign.Start)
+      }
+
+      if (this.pid.length > 0 && (this.canReply || this.canRate || this.canFavorite)) {
+        Row({ space: 8 }) {
+          Blank()
+          if (this.canReply) {
+            Text('回复')
+              .fontSize(11)
+              .fontColor(getTheme(this.isDark).accent)
+              .backgroundColor(getTheme(this.isDark).accentBg)
+              .borderRadius(4)
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .onClick(() => {
+                const summary = renderPostSummary(this.contentHtml, 90);
+                this.onReplyClick(this.pid, this.floor, this.authorName, summary);
+              })
+          }
+          if (this.canRate) {
+            Text('评分')
+              .fontSize(11)
+              .fontColor(getTheme(this.isDark).accent)
+              .backgroundColor(getTheme(this.isDark).accentBg)
+              .borderRadius(4)
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .onClick(() => {
+                this.onRateClick(this.pid, this.floor, this.authorName);
+              })
+          }
+          if (this.canFavorite) {
+            Text('收藏')
+              .fontSize(11)
+              .fontColor(getTheme(this.isDark).accent)
+              .backgroundColor(getTheme(this.isDark).accentBg)
+              .borderRadius(4)
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .onClick(() => {
+                this.onFavoriteClick(this.pid, this.floor);
+              })
+          }
+        }
+        .width('100%')
+      }
     }
     .width('100%')
     .padding(14)
     .backgroundColor(getTheme(this.isDark).cardBg)
+    .border(
+      this.isHighlighted
+        ? { width: 1.5, color: getTheme(this.isDark).accent }
+        : { width: 0, color: Color.Transparent }
+    )
     .borderRadius(12)
     .alignItems(HorizontalAlign.Start)
   }

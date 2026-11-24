@@ -114,6 +114,18 @@ export const POST_LIST_FRAGMENT = `fragment postListComponent on Query {
       name
       avatar
     }
+    rate {
+      id
+      pid
+      num
+      reason
+      dateline
+      user {
+        uid
+        name
+        avatar
+      }
+    }
   }
 }`;
 
@@ -337,5 +349,182 @@ export const EDIT_FAVORITE_GROUP_MUTATION = `mutation EditFavoriteGroup($groupid
 export const DEL_FAVORITE_GROUP_MUTATION = `mutation DelFavoriteGroup($groupid: Int!) {
   delFavoriteGroup(id: $groupid) {
     ok
+  }
+}`;
+
+export const REPLY_THREAD_MUTATION = `mutation Reply($tid: Int!, $content: String!, $pid: String) {
+  replyThread(tid: $tid, content: $content, pid: $pid) {
+    lou
+    pid
+    content
+    dateline
+    quote {
+      pid
+      status
+      content
+      author {
+        uid
+        name
+      }
+    }
+    user {
+      uid
+      name
+      avatar
+    }
+  }
+}`;
+
+export const NEW_THREAD_MUTATION = `mutation NewThread($fid: Int!, $title: String!, $content: String!) {
+  postThread(fid: $fid, title: $title, content: $content) {
+    tid
+  }
+}`;
+
+export const RATE_POST_MUTATION = `mutation Rate($tid: Int!, $pid: String!, $num: Int!, $reason: String) {
+  rate(tid: $tid, pid: $pid, num: $num, reason: $reason) {
+    id
+    pid
+    num
+    reason
+    dateline
+    user {
+      uid
+      name
+      avatar
+    }
+  }
+}`;
+
+export const GET_NOTICE_COUNT_QUERY = `query GetNoticeCount {
+  noticeCount {
+    noticeCount
+    fansCount
+    rateCount
+    atmeCount
+    pmCount
+  }
+}`;
+
+export const VIEW_NOTICES_QUERY = `query ViewNotices($date: Date) {
+  notice(date: $date) {
+    data: notices {
+      id
+      uid
+      action
+      content
+      authorid
+      author
+      dateline
+      fromid
+    }
+    hasMore
+    nextDate
+  }
+}`;
+
+export const VIEW_ATME_QUERY = `query ViewAtMe($date: Date) {
+  atme(date: $date) {
+    data: posts {
+      authorid
+      author {
+        uid
+        name
+        avatar
+      }
+      dateline
+      content
+      pid
+      __typename
+      ... on MajorPost {
+        thread {
+          tid
+          title
+          replies
+          fid
+          forumName
+        }
+      }
+      ... on MajorReply {
+        thread {
+          tid
+          title
+          authorid
+          author {
+            uid
+            name
+          }
+        }
+      }
+      ... on MinorPost {
+        thread {
+          tid
+          fid
+        }
+      }
+      ... on MajorBookReview {
+        thread {
+          tid
+          replies
+        }
+        book {
+          bid
+          title
+        }
+      }
+      ... on MajorBookReviewReply {
+        thread {
+          tid
+          title
+          author {
+            uid
+            name
+          }
+        }
+        book {
+          bid
+          title
+        }
+      }
+    }
+    hasMore
+    nextDate
+  }
+}`;
+
+export const VIEW_RATE_NOTICE_QUERY = `query ViewRateNotice($date: Date) {
+  rateNotice(date: $date) {
+    data: rates {
+      uid
+      rid
+      tid
+      pid
+      title
+      num
+      user {
+        uid
+        name
+      }
+      dateline
+    }
+    hasMore
+    nextDate
+  }
+}`;
+
+export const VIEW_FANS_NOTICE_QUERY = `query ViewFansNotice($date: Date) {
+  fansNotice(date: $date) {
+    data: users {
+      uid
+      name
+      isFollow
+      avatar
+      verify {
+        info
+        type
+      }
+    }
+    hasMore
+    nextDate
   }
 }`;

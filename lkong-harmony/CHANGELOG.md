@@ -6,7 +6,33 @@
 
 ## 版本变更记录
 
-### [1.2.0] - 2026-11-23
+### [1.3.0] - 2026-11-24
+
+#### 新增（Added）
+- **统一发帖 / 回帖 / 引用回复页（`ComposePage`）与仅本机草稿**：
+  - 新增 `pages/ComposePage.ets`，由 `ForumPage` 顶部「发帖」、`ThreadPage` 底部「回复」及 `PostCard` 楼层「回复」统一进入，支持发布新主题（`NewThread` / `postThread`，标题限制 26 字并实时计数）、回复主题与引用回复楼层（`Reply` / `replyThread`）。
+  - 支持在编辑页一键切换「预览」模式，直接复用 `PostCard` 渲染真实发布后的表情、段落与图片效果；支持锁帖（`thread.lock`）状态识别与禁用提示。
+  - 新增 `store/DraftPrefs.ets`，按版块/主题/引用楼层在本地 `Preferences` 自动防抖暂存未发布内容与已上传图片元数据，发送成功后自动清理，不占用串行请求队列。
+- **龙空官方表情面板与相册传图**：
+  - 新增 `utils/PostComposerUtils.ets` 与 `components/EmotionPicker.ets`，完整收录龙空官网 4 大表情分组（悠嘻猴、悠嘻猴2、洋葱头、洋葱头2，共 154 个 `em{id}.gif` 动图表情），支持点选插入 `[em{id}]` 与整段退格删除，发布时自动序列化为龙空官方 Slate JSON 块数组。
+  - 新增 `utils/ImageUploadUtils.ets`、`components/ImageAttachmentBar.ets` 与 `HttpClient.uploadImage`：通过系统安全选图器（`@kit.MediaLibraryKit` `PhotoViewPicker`，无需额外申请存储权限）选图，超大图自动等比压缩为 JPEG（GIF 保持原文件直传以防丢帧），以 `multipart/form-data` 直传 `https://images.lkong.com/upload`，支持单次最多 9 张、上传进度与失败重试。
+- **楼层龙币评分（展示 + 评分提交）**：
+  - `POST_LIST_FRAGMENT` 补充查询 `rate { id pid num reason dateline user { uid name avatar } }`，`PostCard.ets` 展示楼层评分汇总（总条数、总龙币与展开/收起明细列表）。
+  - `LkongApi` 接入 `Rate` mutation，`ThreadPage.ets` 新增楼层评分弹窗（快捷档位 `+1/+5/+10/+50/+100`、自定义整数龙币与理由），提交成功后实时刷新对应楼层评分记录。
+- **站内消息通知中心与首页未读角标**：
+  - 新增 `pages/NotificationsPage.ets`，接入 `ViewNotices`（回复通知、`modifyThread/modifyPost` 19 种版务操作与 `note` 系统公告）、`ViewAtMe`、`ViewRateNotice`、`ViewFansNotice` 与 `GetNoticeCount`，支持分类未读角标与 `nextDate` 游标加载更多。
+  - `Index.ets` 接入未读通知统计，在底部「我的」Tab 显示未读红点角标，并在首页顶部与「我的」页面新增「消息通知」入口。
+- **楼层 `pid` 精确定位与高亮**：
+  - `LkongApi.getThreadDetail` 与 `ThreadPage.ets` 支持传入目标 `pid`，由服务端定位所在页码并自动滚动居中及高亮目标楼层边框；打通 `NotificationsPage`、`FavoriteDetailPage` 与回复成功后返回原帖的楼层直达体验。
+
+#### 变更（Changed）
+- 升级 `AppScope/app.json5` 至 `1.3.0`（`versionCode: 1003000`），同步更新 `AppConfig.APP_VERSION` 为 `'1.3.0'`。
+- `ContentUtils.ets` 补充兼容龙空官网实际线协议中的 `heading-one` / `heading-two` / `heading-three` 与 `block-quote` 节点类型。
+- 更新 `SettingsPage.ets`、`README.md` 与 `CHANGELOG.md` 的接口、图床上传白名单、工程结构与测试清单说明。
+
+---
+
+### [1.2.0] - 2026-11-23（已实装）
 
 #### 新增（Added）
 - **首页底部 4 TabBar 与今日热帖**：
@@ -112,15 +138,15 @@
 |---|---|---|---|
 | **v1.0.2** | 2026-11-21 | 已内测发版 | 首页每日签到、楼层图文混排、UUID `pid` 与删楼翻页修复 |
 | **v1.1.0** | 2026-11-22 ~ 2026-11-24 | 已内测发版（已部署真机） | 只看作者、快速跳页、富文本样式与链接复制、深色模式与字号调节 |
-| **v1.2.0** | 2026-11-23 | 代码已开发待真机验证 | 首页底部 4 TabBar（版块/热帖/常用/我的）、版块置顶与自定义排序、搜索、纯云端收藏夹、个人资料页、引用楼层展示 |
-| **v1.3.0** | 2026-12-11 ~ 2026-12-20 | 论坛基础互动 | 回帖/引用回复、龙空表情选择器、发新帖与传图、站内消息通知 |
+| **v1.2.0** | 2026-11-23 | 已实装 | 首页底部 4 TabBar（版块/热帖/常用/我的）、版块置顶与自定义排序、搜索、纯云端收藏夹、个人资料页、引用楼层展示 |
+| **v1.3.0** | 2026-11-24 | 代码已开发待真机验证 | 统一 `ComposePage` 发新帖/回帖/引用回复、官方表情面板与相册传图、楼层龙币评分（展示+提交）、站内消息通知与未读红点、`pid` 楼层定位高亮 |
 | **v1.4.0** | 2026-12-21 ~ 2026-12-31 | 看图增强与技术债清理 | 大图缩放/多图切换/保存相册、私信与 `twoWay` 调研、迁移废弃系统 API |
 
 ---
 
 ### 分阶段详细规划
 
-#### 1. v1.2.0 — 发现与内容聚合（2026-11-23，代码已开发待真机验证）
+#### 1. v1.2.0 — 发现与内容聚合（2026-11-23，已实装）
 - **首页底部 4 TabBar 聚合**：扩展首页为「版块 / 热帖 / 常用 / 我的」底部四栏结构（热帖对应官网 `threadsFragment(fid: 0, type: "hot")` 懒加载接口）。
 - **版块常用置顶与自定义排序**：支持将版块置顶到「常用」区、置首/上移/下移与恢复默认顺序，并持久化到本地 `Preferences`。
 - **综合搜索功能**：接入 `SearchThreads` / `SearchForums` / `SearchUsers`，支持帖子排序、关键词高亮、游标加载更多与最近搜索历史。
@@ -128,11 +154,12 @@
 - **用户资料页**：点击任意作者或本人入口查看基础信息、等级与统计、主题列表与云端收藏分组。
 - **引用楼层展示**：在 `postListComponent` 接入 `quote` 字段，并在楼层正文前展示被引用楼层卡片（支持已删提示与长内容展开/收起）。
 
-#### 2. v1.3.0 — 论坛基础互动能力（2026-12-11 ~ 2026-12-20）
-- **回帖与引用回复**（原参考 `lkongdroid` `NewPostActivity`，目录已删除）：在 `ThreadPage` 底部增加快速回复入口，支持针对具体楼层回复与正文编辑。
-- **龙空表情面板**：参照官网表情分类与原 `lkongdroid/assets/emoji` 布局（目录已删除，后续以官网表情分类与 `https://image.lkong.com/bq/em{id}.gif` 为准），支持在发帖/回帖编辑器中点选插入 `em{id}` 表情。
-- **发新帖与图片上传**（原参考 `lkongdroid` `NewThreadActivity`，目录已删除）：调研龙空 GraphQL 图片上传签名流程并接入系统图库选图上传。
-- **站内消息通知**（原参考 `lkongdroid` `notice`，目录已删除）：查看回复通知、`@提及` 与评分记录，并在首页显示未读提示。
+#### 2. v1.3.0 — 论坛基础互动能力（2026-11-24，代码已开发待真机验证）
+- **统一编辑页（`ComposePage`）与本地草稿**：发新帖（标题限 26 字）、回复主题与引用回复共用独立编辑页，支持实时预览与仅本机 `Preferences` 自动暂存草稿。
+- **龙空官方表情面板**：接入悠嘻猴、悠嘻猴2、洋葱头、洋葱头2 共 154 个官方表情，点击插入 `[em{id}]` 并自动序列化为官网 Slate JSON 格式。
+- **系统相册选图与图床上传**：通过 `PhotoViewPicker` 免权限选图并压缩后直传 `https://images.lkong.com/upload`（GIF 原图直传）。
+- **楼层龙币评分**：在 `PostCard` 展示已有评分汇总与明细，并通过 `Rate` mutation 提交龙币评分。
+- **站内消息通知中心与楼层定位**：新增 `NotificationsPage` 与首页未读红点角标（通知 / `@我` / 评分 / 粉丝），并支持 `pid` 精确定位与高亮目标楼层。
 
 #### 3. v1.4.0 — 看图增强与技术债清理（2026-12-21 ~ 2026-12-31）
 - **看图体验升级**（原参考 `lkongdroid` `PhotoViewPagerActivity`，目录已删除）：全屏图片预览支持双指捏合缩放、左右滑动切换同帖多图、保存图片到系统相册。

@@ -108,10 +108,12 @@ function renderJson(value: Object): string {
 
   const content = children.length > 0 ? renderChildren(children) : text;
 
-  if (type === 'paragraph' || type === 'heading' || type === 'codeBlock' || type === 'code_block') {
+  if (type === 'paragraph' || type === 'heading' ||
+    type === 'heading-one' || type === 'heading-two' || type === 'heading-three' ||
+    type === 'codeBlock' || type === 'code_block') {
     return content + '\n';
   }
-  if (type === 'blockquote') {
+  if (type === 'blockquote' || type === 'block-quote') {
     const lines = content.trim().split('\n');
     const quoted: string[] = [];
     for (const line of lines) {
@@ -671,7 +673,7 @@ function collectJsonBlocks(
     return;
   }
 
-  if (type === 'blockquote') {
+  if (type === 'blockquote' || type === 'block-quote') {
     flushInlines(blocks, pending, blockKind);
     if (children.length > 0) {
       for (const child of children) {
@@ -702,7 +704,7 @@ function collectJsonBlocks(
     return;
   }
 
-  if (type === 'heading') {
+  if (type === 'heading' || type === 'heading-one' || type === 'heading-two' || type === 'heading-three') {
     flushInlines(blocks, pending, blockKind);
     if (children.length > 0) {
       for (const child of children) {

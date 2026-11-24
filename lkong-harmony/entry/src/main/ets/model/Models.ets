@@ -36,6 +36,8 @@ export interface ThreadDetail {
   forumName: string;
   fid: number;
   firstPid: string;
+  isLocked: boolean;
+  resolvedPage: number;
 }
 
 export interface PostQuote {
@@ -44,6 +46,17 @@ export interface PostQuote {
   authorId: number;
   authorName: string;
   contentHtml: string;
+}
+
+export interface PostRateItem {
+  id: string;
+  pid: string;
+  num: number;
+  reason: string;
+  dateline: string;
+  userId: number;
+  userName: string;
+  userAvatarUrl: string;
 }
 
 export interface PostItem {
@@ -56,6 +69,105 @@ export interface PostItem {
   subject: string;
   isAuthor: boolean;
   quote: PostQuote | null;
+  rates: PostRateItem[];
+}
+
+export interface UploadedImage {
+  key: string;
+  width: number;
+  height: number;
+}
+
+export interface LocalDraft {
+  title: string;
+  content: string;
+  images: UploadedImage[];
+  updatedAt: number;
+}
+
+export interface NoticeCount {
+  noticeCount: number;
+  fansCount: number;
+  rateCount: number;
+  atmeCount: number;
+  pmCount: number;
+}
+
+export interface NoticeReplyUser {
+  uid: number;
+  name: string;
+  pid: string;
+}
+
+export interface NoticeItem {
+  id: string;
+  action: string;
+  dateline: string;
+  tid: number;
+  pid: string;
+  title: string;
+  summary: string;
+  actorId: number;
+  actorName: string;
+  replyUsers: NoticeReplyUser[];
+}
+
+export interface NoticeListResult {
+  items: NoticeItem[];
+  hasMore: boolean;
+  nextDate: string;
+}
+
+export interface AtMeItem {
+  pid: string;
+  tid: number;
+  title: string;
+  forumName: string;
+  fid: number;
+  authorId: number;
+  authorName: string;
+  authorAvatarUrl: string;
+  dateline: string;
+  contentHtml: string;
+  typeName: string;
+}
+
+export interface AtMeListResult {
+  items: AtMeItem[];
+  hasMore: boolean;
+  nextDate: string;
+}
+
+export interface RateNoticeItem {
+  rid: string;
+  tid: number;
+  pid: string;
+  title: string;
+  num: number;
+  userId: number;
+  userName: string;
+  dateline: string;
+}
+
+export interface RateNoticeListResult {
+  items: RateNoticeItem[];
+  hasMore: boolean;
+  nextDate: string;
+}
+
+export interface FanNoticeItem {
+  uid: number;
+  name: string;
+  avatarUrl: string;
+  isFollow: boolean;
+  verifyInfo: string;
+  verifyType: string;
+}
+
+export interface FanNoticeListResult {
+  items: FanNoticeItem[];
+  hasMore: boolean;
+  nextDate: string;
 }
 
 export interface CurrentUser {

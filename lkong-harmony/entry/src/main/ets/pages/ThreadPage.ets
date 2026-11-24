@@ -1,12 +1,18 @@
 import { promptAction, router } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
-import { ApiError, ErrorKind, FavoriteGroupOption, PostItem } from '../model/Models';
+import { ApiError, ErrorKind, FavoriteGroupOption, PostItem, PostRateItem } from '../model/Models';
 import { LkongApi } from '../network/LkongApi';
 import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
 import { StateView } from '../components/StateView';
 import { PostCard } from '../components/PostCard';
+import {
+  KEY_THREAD_REFRESH_LOU,
+  KEY_THREAD_REFRESH_PID,
+  KEY_THREAD_REFRESH_SEQ,
+  KEY_THREAD_REFRESH_TID
+} from '../utils/AppConfig';
 import { formatTime } from '../utils/TimeUtils';
 import {
   FontSizePreset,
@@ -17,6 +23,7 @@ import {
 } from '../utils/Theme';
 
 const POSTS_PER_PAGE: number = 20;
+const RATE_PRESETS: number[] = [1, 5, 10, 50, 100];
 const FONT_PRESETS: number[] = [
   FontSizePreset.SMALL,
   FontSizePreset.STANDARD,
@@ -27,6 +34,7 @@ const FONT_PRESETS: number[] = [
 interface ThreadParams {
   tid: number;
   title: string;
+  pid?: string;
 }
 
 /**
@@ -45,6 +53,9 @@ struct ThreadPage {
   @State viewCount: number = 0;
   @State forumName: string = '';
   @State firstPid: string = '';
+  @State isLocked: boolean = false;
+  @State highlightPid: string = '';
+  @State pendingScrollPid: string = '';
   @State page: number = 1;
   @State posts: PostItem[] = [];
   @State loading: boolean = true;
@@ -58,6 +69,15 @@ struct ThreadPage {
   @State jumpInput: string = '';
   @State previewImageUrl: string = '';
   @State activeLinkUrl: string = '';
+
+  // 楼层评分弹窗状态
+  @State showRateModal: boolean = false;
+  @State rateTargetPid: string = '';
+  @State rateTargetFloor: string = '';
+  @State rateTargetAuthor: string = '';
+  @State rateNumInput: string = '10';
+  @State rateReasonInput: string = '';
+  @State rateSubmitting: boolean = false;
 
   // 云端收藏弹窗状态
   @State showFavoriteModal: boolean = false;
@@ -75,6 +95,8 @@ struct ThreadPage {
 
   @StorageProp(KEY_IS_DARK) isDark: boolean = false;
   @StorageProp(KEY_FONT_SIZE) bodyFontSize: number = FontSizePreset.STANDARD;
+  private listScroller: Scroller = new Scroller();
+  private lastRefreshSeq: number = 0;
 
   onBackPress(): boolean {
     if (this.previewImageUrl.length > 0) {
@@ -83,6 +105,10 @@ struct ThreadPage {
     }
     if (this.activeLinkUrl.length > 0) {
       this.activeLinkUrl = '';
+      return true;
+    }
+    if (this.showRateModal) {
+      this.showRateModal = false;
       return true;
     }
     if (this.showFavoriteModal) {
@@ -106,11 +132,32 @@ struct ThreadPage {
       const params = raw as ThreadParams;
       this.tid = params.tid === undefined ? 0 : params.tid;
       this.fallbackTitle = params.title === undefined ? '' : params.title;
+      const paramPid = params.pid === undefined ? '' : params.pid;
+      this.pendingScrollPid = paramPid;
+      this.highlightPid = paramPid;
     }
+    const existingSeq = AppStorage.get<number>(KEY_THREAD_REFRESH_SEQ);
+    this.lastRefreshSeq = existingSeq === undefined ? 0 : existingSeq;
     this.bootstrap();
   }
 
   onPageShow(): void {
+    const seq = AppStorage.get<number>(KEY_THREAD_REFRESH_SEQ);
+    const refreshTid = AppStorage.get<number>(KEY_THREAD_REFRESH_TID);
+    if (seq !== undefined && seq > this.lastRefreshSeq && refreshTid === this.tid && this.tid > 0) {
+      this.lastRefreshSeq = seq;
+      this.onlyAuthor = false;
+      const refreshPid = AppStorage.get<string>(KEY_THREAD_REFRESH_PID);
+      const refreshLou = AppStorage.get<number>(KEY_THREAD_REFRESH_LOU);
+      if (refreshPid !== undefined && refreshPid.length > 0) {
+        this.pendingScrollPid = refreshPid;
+        this.highlightPid = refreshPid;
+      } else if (refreshLou !== undefined && refreshLou > 0) {
+        this.page = Math.max(1, Math.ceil(refreshLou / POSTS_PER_PAGE));
+      }
+      this.loadPage();
+      return;
+    }
     if (this.needLogin && CookieStore.getInstance().hasCookie()) {
       this.loadPage();
     }
@@ -135,9 +182,11 @@ struct ThreadPage {
     this.loading = true;
     this.errorMessage = '';
     this.needLogin = false;
+    const targetPid = this.pendingScrollPid;
+    this.pendingScrollPid = '';
     try {
       const filterAuthorId = this.onlyAuthor && this.authorId > 0 ? this.authorId : 0;
-      const data = await LkongApi.getInstance().getThreadDetail(this.tid, this.page, filterAuthorId);
+      const data = await LkongApi.getInstance().getThreadDetail(this.tid, this.page, filterAuthorId, targetPid);
       this.apiTitle = data.thread.title;
       this.authorName = data.thread.authorName;
       if (data.thread.authorId > 0) {
@@ -147,8 +196,12 @@ struct ThreadPage {
       this.replyCount = data.thread.replyCount;
       this.viewCount = data.thread.viewCount;
       this.forumName = data.thread.forumName;
+      this.isLocked = data.thread.isLocked;
       if (data.thread.firstPid.length > 0) {
         this.firstPid = data.thread.firstPid;
+      }
+      if (targetPid.length > 0 && data.thread.resolvedPage > 0) {
+        this.page = data.thread.resolvedPage;
       }
       this.posts = data.posts;
       if (this.onlyAuthor) {
@@ -163,6 +216,9 @@ struct ThreadPage {
           this.hasMore = data.posts.length >= POSTS_PER_PAGE;
         }
       }
+      if (targetPid.length > 0) {
+        this.scrollToTargetPid(targetPid);
+      }
     } catch (error) {
       if (error instanceof ApiError && error.kind === ErrorKind.AUTH) {
         this.needLogin = true;
@@ -175,6 +231,26 @@ struct ThreadPage {
     } finally {
       this.loading = false;
     }
+  }
+
+  private scrollToTargetPid(targetPid: string): void {
+    let foundIndex = -1;
+    for (let i = 0; i < this.posts.length; i++) {
+      if (this.posts[i].pid === targetPid) {
+        foundIndex = i;
+        break;
+      }
+    }
+    if (foundIndex < 0) {
+      return;
+    }
+    const listItemIndex = foundIndex + 1;
+    setTimeout(() => {
+      try {
+        this.listScroller.scrollToIndex(listItemIndex, true, ScrollAlign.CENTER);
+      } catch (error) {
+      }
+    }, 80);
   }
 
   private displayTitle(): string {
@@ -245,6 +321,112 @@ struct ThreadPage {
       return;
     }
     this.jumpToPage(parsed);
+  }
+
+  private openComposeReply(
+    quotePid: string,
+    quoteFloor: string,
+    quoteAuthorName: string,
+    quoteSummary: string
+  ): void {
+    if (!CookieStore.getInstance().hasCookie()) {
+      this.showToast('请先登录后再回复');
+      this.goLogin();
+      return;
+    }
+    if (this.isLocked) {
+      this.showToast('该主题已锁定，暂不能回复');
+      return;
+    }
+    router.pushUrl({
+      url: 'pages/ComposePage',
+      params: {
+        mode: 'reply',
+        tid: this.tid,
+        threadTitle: this.displayTitle(),
+        quotePid: quotePid,
+        quoteFloor: quoteFloor,
+        quoteAuthorName: quoteAuthorName,
+        quoteSummary: quoteSummary
+      }
+    }).catch(() => {
+    });
+  }
+
+  private openRateModal(pid: string, floor: string, authorName: string): void {
+    if (!CookieStore.getInstance().hasCookie()) {
+      this.showToast('请先登录后再评分');
+      this.goLogin();
+      return;
+    }
+    if (pid.length === 0) {
+      this.showToast('当前楼层不支持评分');
+      return;
+    }
+    this.rateTargetPid = pid;
+    this.rateTargetFloor = floor;
+    this.rateTargetAuthor = authorName;
+    this.rateNumInput = '10';
+    this.rateReasonInput = '';
+    this.rateSubmitting = false;
+    this.showRateModal = true;
+  }
+
+  private async submitRate(): Promise<void> {
+    if (this.rateSubmitting) {
+      return;
+    }
+    const trimmedNum = this.rateNumInput.trim();
+    const num = Number(trimmedNum);
+    if (!/^\d+$/.test(trimmedNum) || isNaN(num) || num < 1 || num > 10000000) {
+      this.showToast('请输入 1 到 10000000 的整数龙币');
+      return;
+    }
+    this.rateSubmitting = true;
+    try {
+      const rateItem = await LkongApi.getInstance().ratePost(
+        this.tid,
+        this.rateTargetPid,
+        num,
+        this.rateReasonInput.trim()
+      );
+      const nextPosts: PostItem[] = [];
+      for (const post of this.posts) {
+        if (post.pid === this.rateTargetPid) {
+          const nextRates: PostRateItem[] = [rateItem];
+          for (const existing of post.rates) {
+            nextRates.push(existing);
+          }
+          nextPosts.push({
+            pid: post.pid,
+            floor: post.floor,
+            authorName: post.authorName,
+            authorId: post.authorId,
+            postTime: post.postTime,
+            contentHtml: post.contentHtml,
+            subject: post.subject,
+            isAuthor: post.isAuthor,
+            quote: post.quote,
+            rates: nextRates
+          });
+        } else {
+          nextPosts.push(post);
+        }
+      }
+      this.posts = nextPosts;
+      this.showRateModal = false;
+      this.showToast(`评分成功（+${num} 龙币）`);
+    } catch (error) {
+      if (error instanceof ApiError && error.kind === ErrorKind.AUTH) {
+        this.showToast(error.message);
+        this.goLogin();
+      } else {
+        const message = error instanceof ApiError ? error.message : '评分失败，请稍后重试。';
+        this.showToast(message);
+      }
+    } finally {
+      this.rateSubmitting = false;
+    }
   }
 
   private async copyActiveLink(): Promise<void> {
@@ -516,7 +698,7 @@ struct ThreadPage {
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
         } else {
-          List({ space: 10 }) {
+          List({ space: 10, scroller: this.listScroller }) {
             ListItem() {
               Column({ space: 6 }) {
                 Text(this.displayTitle())
@@ -614,6 +796,11 @@ struct ThreadPage {
                   quoteAuthorId: post.quote !== null ? post.quote.authorId : 0,
                   quoteAuthorName: post.quote !== null ? post.quote.authorName : '',
                   quoteContentHtml: post.quote !== null ? post.quote.contentHtml : '',
+                  rates: post.rates,
+                  isHighlighted: this.highlightPid.length > 0 && post.pid === this.highlightPid,
+                  canReply: !this.isLocked,
+                  canRate: true,
+                  canFavorite: true,
                   onImageClick: (url: string) => {
                     this.previewImageUrl = url;
                   },
@@ -626,12 +813,18 @@ struct ThreadPage {
                   onFavoriteClick: (pid: string, floor: string) => {
                     const label = floor.length > 0 ? `第 ${floor} 楼` : '该楼层';
                     this.openFavoriteModal(pid, label);
+                  },
+                  onReplyClick: (pid: string, floor: string, authorName: string, summary: string) => {
+                    this.openComposeReply(pid, floor, authorName, summary);
+                  },
+                  onRateClick: (pid: string, floor: string, authorName: string) => {
+                    this.openRateModal(pid, floor, authorName);
                   }
                 })
               }
             }, (post: PostItem, index: number) =>
               post.pid.length > 0
-                ? `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.pid}_${post.quote !== null ? 'q' : 'nq'}`
+                ? `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.pid}_${post.quote !== null ? 'q' : 'nq'}_${post.rates.length}_${post.pid === this.highlightPid ? 'hl' : 'nhl'}`
                 : `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.floor}_${index}`
             )
           }
@@ -639,9 +832,9 @@ struct ThreadPage {
           .padding({ left: 16, right: 16 })
           .scrollBar(BarState.Auto)
 
-          Row({ space: 10 }) {
+          Row({ space: 8 }) {
             Button('上一页')
-              .fontSize(13)
+              .fontSize(12)
               .height(34)
               .backgroundColor(
                 this.page > 1 ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).disabledBtnBg
@@ -651,8 +844,8 @@ struct ThreadPage {
               .onClick(() => {
                 this.previousPage();
               })
-            Button(this.onlyAuthor ? `仅看作者 · 第 ${this.page} 页 ▾` : `第 ${this.page} / ${this.totalPages} 页 ▾`)
-              .fontSize(13)
+            Button(this.onlyAuthor ? `仅作者·${this.page}页 ▾` : `${this.page} / ${this.totalPages} 页 ▾`)
+              .fontSize(12)
               .height(34)
               .backgroundColor(getTheme(this.isDark).cardBg)
               .fontColor(getTheme(this.isDark).textPrimary)
@@ -661,7 +854,7 @@ struct ThreadPage {
                 this.showJumpModal = true;
               })
             Button('下一页')
-              .fontSize(13)
+              .fontSize(12)
               .height(34)
               .backgroundColor(
                 this.hasMore ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).disabledBtnBg
@@ -671,15 +864,131 @@ struct ThreadPage {
               .onClick(() => {
                 this.nextPage();
               })
+            Button(this.isLocked ? '已锁' : '回复')
+              .fontSize(12)
+              .height(34)
+              .backgroundColor(
+                this.isLocked ? getTheme(this.isDark).disabledBtnBg : getTheme(this.isDark).accentSolid
+              )
+              .fontColor(this.isLocked ? getTheme(this.isDark).disabledBtnText : Color.White)
+              .enabled(!this.isLocked)
+              .onClick(() => {
+                this.openComposeReply('', '', '', '');
+              })
           }
           .width('100%')
           .justifyContent(FlexAlign.Center)
-          .padding(12)
+          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
         }
       }
       .width('100%')
       .height('100%')
       .backgroundColor(getTheme(this.isDark).pageBg)
+
+      if (this.showRateModal) {
+        Column() {
+          Column({ space: 12 }) {
+            Text('楼层评分')
+              .fontSize(16)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(getTheme(this.isDark).textPrimary)
+            Text(
+              `对象：${this.rateTargetFloor.length > 0 ? `${this.rateTargetFloor} 楼 ` : ''}${this.rateTargetAuthor.length > 0 ? `@${this.rateTargetAuthor}` : ''}`
+            )
+              .fontSize(12)
+              .fontColor(getTheme(this.isDark).textSecondary)
+
+            Row({ space: 6 }) {
+              ForEach(RATE_PRESETS, (preset: number) => {
+                Button(`+${preset}`)
+                  .fontSize(12)
+                  .height(30)
+                  .layoutWeight(1)
+                  .backgroundColor(
+                    this.rateNumInput === `${preset}`
+                      ? getTheme(this.isDark).accentSolid
+                      : getTheme(this.isDark).surfaceMuted
+                  )
+                  .fontColor(
+                    this.rateNumInput === `${preset}`
+                      ? Color.White
+                      : getTheme(this.isDark).textPrimary
+                  )
+                  .onClick(() => {
+                    this.rateNumInput = `${preset}`;
+                  })
+              }, (preset: number) => `${this.isDark ? 'd' : 'l'}_rp_${this.rateNumInput}_${preset}`)
+            }
+            .width('100%')
+
+            TextInput({
+              placeholder: '龙币数量（1 - 10000000）',
+              text: this.rateNumInput
+            })
+              .type(InputType.Number)
+              .height(40)
+              .fontSize(14)
+              .fontColor(getTheme(this.isDark).textPrimary)
+              .placeholderColor(getTheme(this.isDark).textMuted)
+              .backgroundColor(getTheme(this.isDark).inputBg)
+              .onChange((val: string) => {
+                this.rateNumInput = val;
+              })
+
+            TextInput({
+              placeholder: '操作理由（选填）',
+              text: this.rateReasonInput
+            })
+              .height(40)
+              .fontSize(14)
+              .fontColor(getTheme(this.isDark).textPrimary)
+              .placeholderColor(getTheme(this.isDark).textMuted)
+              .backgroundColor(getTheme(this.isDark).inputBg)
+              .onChange((val: string) => {
+                this.rateReasonInput = val;
+              })
+
+            Row({ space: 10 }) {
+              Button('取消')
+                .fontSize(13)
+                .height(36)
+                .layoutWeight(1)
+                .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                .fontColor(getTheme(this.isDark).textSecondary)
+                .onClick(() => {
+                  this.showRateModal = false;
+                })
+              Button(this.rateSubmitting ? '提交中...' : '确定评分')
+                .fontSize(13)
+                .height(36)
+                .layoutWeight(1)
+                .backgroundColor(
+                  this.rateSubmitting ? getTheme(this.isDark).disabledBtnBg : getTheme(this.isDark).accentSolid
+                )
+                .fontColor(this.rateSubmitting ? getTheme(this.isDark).disabledBtnText : Color.White)
+                .enabled(!this.rateSubmitting)
+                .onClick(() => {
+                  this.submitRate();
+                })
+            }
+            .width('100%')
+          }
+          .width('86%')
+          .padding(16)
+          .backgroundColor(getTheme(this.isDark).cardBg)
+          .borderRadius(14)
+          .alignItems(HorizontalAlign.Start)
+          .onClick(() => {
+          })
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#80000000')
+        .justifyContent(FlexAlign.Center)
+        .onClick(() => {
+          this.showRateModal = false;
+        })
+      }
 
       if (this.showFavoriteModal) {
         Column() {

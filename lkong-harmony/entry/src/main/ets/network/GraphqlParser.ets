@@ -1,5 +1,9 @@
 import {
+  AtMeItem,
+  AtMeListResult,
   CurrentUser,
+  FanNoticeItem,
+  FanNoticeListResult,
   FavoriteEntry,
   FavoriteGroup,
   FavoriteGroupDetailData,
@@ -8,9 +12,16 @@ import {
   HomeData,
   HotThread,
   LoginResult,
+  NoticeCount,
+  NoticeItem,
+  NoticeListResult,
+  NoticeReplyUser,
   PostItem,
   PostQuote,
+  PostRateItem,
   PunchInfo,
+  RateNoticeItem,
+  RateNoticeListResult,
   SearchForumItem,
   SearchThreadItem,
   SearchThreadsResult,
@@ -22,6 +33,8 @@ import {
   UserProfilePageData
 } from '../model/Models';
 import { buildForumAvatarUrl, buildUserAvatarUrl, stripHighlightTags } from '../utils/AvatarUtils';
+import { renderPostSummary } from '../utils/ContentUtils';
+import { formatModifyActionText } from '../utils/PostComposerUtils';
 import { asRecord, pickArray, pickBoolean, pickNumber, pickObject, pickString } from './JsonUtils';
 
 /**
@@ -129,8 +142,86 @@ export function parseForumPageGraphql(data: Object): ThreadSummary[] {
   return parseThreadArray(rawThreads);
 }
 
+function parsePostRateRecord(record: Record<string, Object>): PostRateItem | null {
+  const num = pickNumber(record, ['num']);
+  const userObj = pickObject(record, ['user']);
+  const userId = pickNumber(userObj, ['uid']);
+  const userName = pickString(userObj, ['name']);
+  const id = pickString(record, ['id']);
+  if (num === 0 && userId <= 0 && userName.length === 0) {
+    return null;
+  }
+  const item: PostRateItem = {
+    id: id,
+    pid: pickString(record, ['pid']),
+    num: num,
+    reason: pickString(record, ['reason']),
+    dateline: pickString(record, ['dateline']),
+    userId: userId,
+    userName: userName,
+    userAvatarUrl: buildUserAvatarUrl(userId, pickString(userObj, ['avatar']))
+  };
+  return item;
+}
+
+function parsePostRates(rawRates: Object[]): PostRateItem[] {
+  const rates: PostRateItem[] = [];
+  for (const rawRate of rawRates) {
+    if (rawRate === null || rawRate === undefined || typeof rawRate !== 'object') {
+      continue;
+    }
+    const parsed = parsePostRateRecord(asRecord(rawRate));
+    if (parsed !== null) {
+      rates.push(parsed);
+    }
+  }
+  rates.sort((a: PostRateItem, b: PostRateItem) => {
+    const ta = Number(a.dateline);
+    const tb = Number(b.dateline);
+    if (!isNaN(ta) && !isNaN(tb)) {
+      return tb - ta;
+    }
+    return b.dateline.localeCompare(a.dateline);
+  });
+  return rates;
+}
+
+function parsePostItemRecord(record: Record<string, Object>, threadAuthorId: number): PostItem {
+  const user = pickObject(record, ['user']);
+  const postUserId = pickNumber(user, ['uid']);
+  const quoteObj = pickObject(record, ['quote']);
+  const quotePid = pickString(quoteObj, ['pid']);
+  const quoteStatus = pickString(quoteObj, ['status']);
+  const quoteContent = pickString(quoteObj, ['content']);
+  const quoteAuthor = pickObject(quoteObj, ['author']);
+  let quote: PostQuote | null = null;
+  if (quotePid.length > 0 || quoteStatus.length > 0 || quoteContent.length > 0) {
+    quote = {
+      pid: quotePid,
+      status: quoteStatus,
+      authorId: pickNumber(quoteAuthor, ['uid']),
+      authorName: pickString(quoteAuthor, ['name']),
+      contentHtml: quoteContent
+    };
+  }
+
+  const item: PostItem = {
+    pid: pickString(record, ['pid']),
+    floor: pickString(record, ['lou']),
+    authorName: pickString(user, ['name']),
+    authorId: postUserId,
+    postTime: pickString(record, ['dateline']),
+    contentHtml: pickString(record, ['content']),
+    subject: '',
+    isAuthor: threadAuthorId > 0 && postUserId === threadAuthorId,
+    quote: quote,
+    rates: parsePostRates(pickArray(record, ['rate']))
+  };
+  return item;
+}
+
 /**
- * ViewThread 返回 thread + posts（含 quote 引用楼层）。
+ * ViewThread 返回 thread + posts（含 quote 引用楼层与 rate 评分列表）。
  * 楼层作者与主题作者 uid 相同时标记为“作者”。
  */
 export function parseThreadPageGraphql(data: Object, fallbackTid: number, page: number): ThreadPageData {
@@ -141,6 +232,7 @@ export function parseThreadPageGraphql(data: Object, fallbackTid: number, page: 
   const threadAuthorId = pickNumber(author, ['uid']);
   const threadId = pickNumber(threadRecord, ['tid']);
   let firstPid = pickString(threadRecord, ['first']);
+  const resolvedPage = pickNumber(threadRecord, ['page']);
 
   const rawPosts = pickArray(root, ['posts']);
   const posts: PostItem[] = [];
@@ -148,39 +240,10 @@ export function parseThreadPageGraphql(data: Object, fallbackTid: number, page: 
     if (rawPost === null || rawPost === undefined || typeof rawPost !== 'object') {
       continue;
     }
-    const record = asRecord(rawPost);
-    const user = pickObject(record, ['user']);
-    const postUserId = pickNumber(user, ['uid']);
-    const quoteObj = pickObject(record, ['quote']);
-    const quotePid = pickString(quoteObj, ['pid']);
-    const quoteStatus = pickString(quoteObj, ['status']);
-    const quoteContent = pickString(quoteObj, ['content']);
-    const quoteAuthor = pickObject(quoteObj, ['author']);
-    let quote: PostQuote | null = null;
-    if (quotePid.length > 0 || quoteStatus.length > 0 || quoteContent.length > 0) {
-      quote = {
-        pid: quotePid,
-        status: quoteStatus,
-        authorId: pickNumber(quoteAuthor, ['uid']),
-        authorName: pickString(quoteAuthor, ['name']),
-        contentHtml: quoteContent
-      };
-    }
-
-    posts.push({
-      pid: pickString(record, ['pid']),
-      floor: pickString(record, ['lou']),
-      authorName: pickString(user, ['name']),
-      authorId: postUserId,
-      postTime: pickString(record, ['dateline']),
-      contentHtml: pickString(record, ['content']),
-      subject: '',
-      isAuthor: threadAuthorId > 0 && postUserId === threadAuthorId,
-      quote: quote
-    });
+    posts.push(parsePostItemRecord(asRecord(rawPost), threadAuthorId));
   }
 
-  if (firstPid.length === 0 && page === 1 && posts.length > 0) {
+  if (firstPid.length === 0 && (resolvedPage === 1 || page === 1) && posts.length > 0) {
     firstPid = posts[0].pid;
   }
 
@@ -194,13 +257,15 @@ export function parseThreadPageGraphql(data: Object, fallbackTid: number, page: 
     viewCount: pickNumber(threadRecord, ['views']),
     forumName: pickString(forum, ['name']),
     fid: pickNumber(threadRecord, ['fid']),
-    firstPid: firstPid
+    firstPid: firstPid,
+    isLocked: pickBoolean(threadRecord, ['lock']),
+    resolvedPage: resolvedPage > 0 ? resolvedPage : page
   };
 
   const result: ThreadPageData = {
     thread: thread,
     posts: posts,
-    page: page
+    page: thread.resolvedPage
   };
   return result;
 }
@@ -527,4 +592,281 @@ export function parseMutationOk(data: Object, fieldName: string): boolean {
   const root = asRecord(data);
   const box = pickObject(root, [fieldName]);
   return pickBoolean(box, ['ok']);
+}
+
+export function parseReplyPost(data: Object): PostItem {
+  const root = asRecord(data);
+  const replyObj = pickObject(root, ['replyThread']);
+  return parsePostItemRecord(replyObj, 0);
+}
+
+export function parseNewThreadTid(data: Object): number {
+  const root = asRecord(data);
+  const box = pickObject(root, ['postThread']);
+  return pickNumber(box, ['tid']);
+}
+
+export function parseRateResult(data: Object): PostRateItem {
+  const root = asRecord(data);
+  const box = pickObject(root, ['rate']);
+  const parsed = parsePostRateRecord(box);
+  if (parsed !== null) {
+    return parsed;
+  }
+  const fallback: PostRateItem = {
+    id: pickString(box, ['id']),
+    pid: pickString(box, ['pid']),
+    num: pickNumber(box, ['num']),
+    reason: pickString(box, ['reason']),
+    dateline: pickString(box, ['dateline']),
+    userId: 0,
+    userName: '',
+    userAvatarUrl: ''
+  };
+  return fallback;
+}
+
+export function parseNoticeCount(data: Object): NoticeCount {
+  const root = asRecord(data);
+  const box = pickObject(root, ['noticeCount']);
+  const count: NoticeCount = {
+    noticeCount: pickNumber(box, ['noticeCount']),
+    fansCount: pickNumber(box, ['fansCount']),
+    rateCount: pickNumber(box, ['rateCount']),
+    atmeCount: pickNumber(box, ['atmeCount']),
+    pmCount: pickNumber(box, ['pmCount'])
+  };
+  return count;
+}
+
+function parseJsonObjectSafe(raw: string): Record<string, Object> {
+  if (raw.length === 0) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Object;
+    return asRecord(parsed);
+  } catch (error) {
+    return {};
+  }
+}
+
+export function parseNoticeList(data: Object): NoticeListResult {
+  const root = asRecord(data);
+  const box = pickObject(root, ['notice']);
+  const rawList = pickArray(box, ['data', 'notices']);
+  const items: NoticeItem[] = [];
+
+  for (const rawItem of rawList) {
+    if (rawItem === null || rawItem === undefined || typeof rawItem !== 'object') {
+      continue;
+    }
+    const record = asRecord(rawItem);
+    const id = pickString(record, ['id']);
+    const action = pickString(record, ['action']);
+    const dateline = pickString(record, ['dateline']);
+    const contentRaw = pickString(record, ['content']);
+    const contentObj = parseJsonObjectSafe(contentRaw);
+
+    let tid = pickNumber(contentObj, ['tid']);
+    let pid = '';
+    let title = pickString(contentObj, ['title']);
+    let summary = '';
+    let actorId = pickNumber(record, ['authorid']);
+    let actorName = pickString(record, ['author']);
+    const replyUsers: NoticeReplyUser[] = [];
+
+    if (action === 'replyThread') {
+      const rawUsers = pickArray(contentObj, ['user']);
+      const names: string[] = [];
+      for (const rawUser of rawUsers) {
+        if (rawUser === null || rawUser === undefined || typeof rawUser !== 'object') {
+          continue;
+        }
+        const userRec = asRecord(rawUser);
+        const uid = pickNumber(userRec, ['uid']);
+        const name = pickString(userRec, ['name']);
+        const replyPid = pickString(userRec, ['pid']);
+        replyUsers.push({
+          uid: uid,
+          name: name,
+          pid: replyPid
+        });
+        if (name.length > 0) {
+          names.push(name);
+        }
+        if (pid.length === 0 && replyPid.length > 0) {
+          pid = replyPid;
+        }
+        if (actorId <= 0 && uid > 0) {
+          actorId = uid;
+          actorName = name;
+        }
+      }
+      summary = names.length > 0 ? `${names.join('、')} 等人回复了你的帖子` : '有人回复了你的帖子';
+    } else if (action === 'modifyThread' || action === 'modifyPost') {
+      const opKey = pickString(contentObj, ['key']);
+      const argsObj = pickObject(contentObj, ['args']);
+      if (action === 'modifyPost') {
+        pid = pickString(argsObj, ['pid']);
+      }
+      const actionText = formatModifyActionText(opKey, argsObj);
+      summary = action === 'modifyThread' ? `你的主题被${actionText}了` : `你的帖子被${actionText}了`;
+    } else if (action === 'note') {
+      const noteValue = contentObj['note'];
+      if (typeof noteValue === 'string') {
+        summary = renderPostSummary(noteValue, 160);
+      } else if (noteValue !== undefined && noteValue !== null) {
+        summary = renderPostSummary(JSON.stringify(noteValue), 160);
+      }
+      if (summary.length === 0) {
+        summary = contentRaw.length > 0 ? renderPostSummary(contentRaw, 160) : '系统通知';
+      }
+    } else {
+      summary = title.length > 0 ? title : '收到一条新通知';
+    }
+
+    items.push({
+      id: id.length > 0 ? id : `${action}_${dateline}_${items.length}`,
+      action: action,
+      dateline: dateline,
+      tid: tid,
+      pid: pid,
+      title: title,
+      summary: summary,
+      actorId: actorId,
+      actorName: actorName,
+      replyUsers: replyUsers
+    });
+  }
+
+  const result: NoticeListResult = {
+    items: items,
+    hasMore: pickBoolean(box, ['hasMore']),
+    nextDate: pickString(box, ['nextDate'])
+  };
+  return result;
+}
+
+export function parseAtMeList(data: Object): AtMeListResult {
+  const root = asRecord(data);
+  const box = pickObject(root, ['atme']);
+  const rawList = pickArray(box, ['data', 'posts']);
+  const items: AtMeItem[] = [];
+
+  for (const rawItem of rawList) {
+    if (rawItem === null || rawItem === undefined || typeof rawItem !== 'object') {
+      continue;
+    }
+    const record = asRecord(rawItem);
+    const authorObj = pickObject(record, ['author']);
+    const threadObj = pickObject(record, ['thread']);
+    const bookObj = pickObject(record, ['book']);
+    const tid = pickNumber(threadObj, ['tid']);
+    const bookTitle = pickString(bookObj, ['title']);
+
+    let title = pickString(threadObj, ['title']);
+    if (title.length === 0 && bookTitle.length > 0) {
+      title = `书评：《${bookTitle}》`;
+    }
+    if (title.length === 0 && tid > 0) {
+      title = `帖子 #${tid}`;
+    }
+
+    let authorId = pickNumber(authorObj, ['uid']);
+    if (authorId <= 0) {
+      authorId = pickNumber(record, ['authorid']);
+    }
+
+    items.push({
+      pid: pickString(record, ['pid']),
+      tid: tid,
+      title: title,
+      forumName: pickString(threadObj, ['forumName']),
+      fid: pickNumber(threadObj, ['fid']),
+      authorId: authorId,
+      authorName: pickString(authorObj, ['name']),
+      authorAvatarUrl: buildUserAvatarUrl(authorId, pickString(authorObj, ['avatar'])),
+      dateline: pickString(record, ['dateline']),
+      contentHtml: pickString(record, ['content']),
+      typeName: pickString(record, ['__typename'])
+    });
+  }
+
+  const result: AtMeListResult = {
+    items: items,
+    hasMore: pickBoolean(box, ['hasMore']),
+    nextDate: pickString(box, ['nextDate'])
+  };
+  return result;
+}
+
+export function parseRateNoticeList(data: Object): RateNoticeListResult {
+  const root = asRecord(data);
+  const box = pickObject(root, ['rateNotice']);
+  const rawList = pickArray(box, ['data', 'rates']);
+  const items: RateNoticeItem[] = [];
+
+  for (const rawItem of rawList) {
+    if (rawItem === null || rawItem === undefined || typeof rawItem !== 'object') {
+      continue;
+    }
+    const record = asRecord(rawItem);
+    const userObj = pickObject(record, ['user']);
+    let userId = pickNumber(userObj, ['uid']);
+    if (userId <= 0) {
+      userId = pickNumber(record, ['uid']);
+    }
+    items.push({
+      rid: pickString(record, ['rid']),
+      tid: pickNumber(record, ['tid']),
+      pid: pickString(record, ['pid']),
+      title: pickString(record, ['title']),
+      num: pickNumber(record, ['num']),
+      userId: userId,
+      userName: pickString(userObj, ['name']),
+      dateline: pickString(record, ['dateline'])
+    });
+  }
+
+  const result: RateNoticeListResult = {
+    items: items,
+    hasMore: pickBoolean(box, ['hasMore']),
+    nextDate: pickString(box, ['nextDate'])
+  };
+  return result;
+}
+
+export function parseFansNoticeList(data: Object): FanNoticeListResult {
+  const root = asRecord(data);
+  const box = pickObject(root, ['fansNotice']);
+  const rawList = pickArray(box, ['data', 'users']);
+  const items: FanNoticeItem[] = [];
+
+  for (const rawItem of rawList) {
+    if (rawItem === null || rawItem === undefined || typeof rawItem !== 'object') {
+      continue;
+    }
+    const record = asRecord(rawItem);
+    const uid = pickNumber(record, ['uid']);
+    if (uid <= 0) {
+      continue;
+    }
+    const verify = pickObject(record, ['verify']);
+    items.push({
+      uid: uid,
+      name: pickString(record, ['name']),
+      avatarUrl: buildUserAvatarUrl(uid, pickString(record, ['avatar'])),
+      isFollow: pickBoolean(record, ['isFollow']),
+      verifyInfo: pickString(verify, ['info']),
+      verifyType: pickString(verify, ['type'])
+    });
+  }
+
+  const result: FanNoticeListResult = {
+    items: items,
+    hasMore: pickBoolean(box, ['hasMore']),
+    nextDate: pickString(box, ['nextDate'])
+  };
+  return result;
 }

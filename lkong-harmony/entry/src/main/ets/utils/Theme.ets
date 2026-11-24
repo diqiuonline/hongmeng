@@ -48,6 +48,7 @@ export interface ThemePalette {
   disabledBtnText: string;
   tabBarBg: string;
   highlightText: string;
+  badgeBg: string;
 }
 
 const LIGHT_THEME: ThemePalette = {
@@ -77,7 +78,8 @@ const LIGHT_THEME: ThemePalette = {
   disabledBtnBg: '#E5E8EE',
   disabledBtnText: '#9AA0A6',
   tabBarBg: '#FFFFFF',
-  highlightText: '#D93025'
+  highlightText: '#D93025',
+  badgeBg: '#D93025'
 };
 
 const DARK_THEME: ThemePalette = {
@@ -107,7 +109,8 @@ const DARK_THEME: ThemePalette = {
   disabledBtnBg: '#2A2C33',
   disabledBtnText: '#6F7580',
   tabBarBg: '#1A1B20',
-  highlightText: '#FF7B72'
+  highlightText: '#FF7B72',
+  badgeBg: '#E53935'
 };
 
 export function getTheme(isDark: boolean): ThemePalette {

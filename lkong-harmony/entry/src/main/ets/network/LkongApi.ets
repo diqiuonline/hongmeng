@@ -1,7 +1,9 @@
 import {
   ApiError,
+  AtMeListResult,
   CurrentUser,
   ErrorKind,
+  FanNoticeListResult,
   FavoriteGroup,
   FavoriteGroupDetailData,
   FavoriteGroupOption,
@@ -10,39 +12,58 @@ import {
   HomeData,
   HotThread,
   LoginResult,
+  NoticeCount,
+  NoticeListResult,
+  PostItem,
+  PostRateItem,
   PunchInfo,
+  RateNoticeListResult,
   SearchForumItem,
   SearchThreadsResult,
   SearchUserItem,
   ThreadPageData,
   ThreadSummary,
+  UploadedImage,
   UserProfilePageData
 } from '../model/Models';
 import { CookieStore } from '../store/CookieStore';
+import { AppConfig } from '../utils/AppConfig';
 import { GraphqlClient } from './GraphqlClient';
+import { HttpClient } from './HttpClient';
+import { asRecord, pickNumber, pickString } from './JsonUtils';
 import {
   CREATE_FAVORITE_GROUP_MUTATION,
   DEL_FAVORITE_GROUP_MUTATION,
   EDIT_FAVORITE_GROUP_MUTATION,
   FAVORITE_POST_MUTATION,
   GET_ME_QUERY,
+  GET_NOTICE_COUNT_QUERY,
   GET_USER_PUNCH_QUERY,
   LOGIN_MUTATION,
   MY_FAVORITE_GROUP_LIST_QUERY,
+  NEW_THREAD_MUTATION,
   PUNCH_MUTATION,
+  RATE_POST_MUTATION,
+  REPLY_THREAD_MUTATION,
   SEARCH_FORUMS_QUERY,
   SEARCH_THREADS_QUERY,
   SEARCH_USERS_QUERY,
+  VIEW_ATME_QUERY,
+  VIEW_FANS_NOTICE_QUERY,
   VIEW_FAVORITE_GROUP_DETAIL_QUERY,
   VIEW_FORUM_PAGE_QUERY,
   VIEW_HOT_THREADS_QUERY,
+  VIEW_NOTICES_QUERY,
+  VIEW_RATE_NOTICE_QUERY,
   VIEW_THREAD_QUERY,
   VIEW_USER_FAVORITE_GROUPS_QUERY,
   VIEW_USER_PROFILE_PAGE_QUERY,
   VIEW_USER_THREADS_PAGE_QUERY
 } from './GraphqlQueries';
 import {
+  parseAtMeList,
   parseCreatedFavoriteGroup,
+  parseFansNoticeList,
   parseFavoriteGroupDetail,
   parseFavoriteGroupOptions,
   parseFavoriteGroups,
@@ -51,7 +72,13 @@ import {
   parseHotThreads,
   parseLoginResult,
   parseMutationOk,
+  parseNewThreadTid,
+  parseNoticeCount,
+  parseNoticeList,
   parsePunchResult,
+  parseRateNoticeList,
+  parseRateResult,
+  parseReplyPost,
   parseSearchForums,
   parseSearchThreads,
   parseSearchUsers,
@@ -81,6 +108,45 @@ interface ThreadAuthorVariables {
   tid: number;
   page: number;
   authorid: number;
+}
+
+interface ThreadPidVariables {
+  tid: number;
+  pid: string;
+}
+
+interface ThreadPidAuthorVariables {
+  tid: number;
+  pid: string;
+  authorid: number;
+}
+
+interface ReplyThreadVariables {
+  tid: number;
+  content: string;
+}
+
+interface ReplyQuoteVariables {
+  tid: number;
+  content: string;
+  pid: string;
+}
+
+interface NewThreadVariables {
+  fid: number;
+  title: string;
+  content: string;
+}
+
+interface RatePostVariables {
+  tid: number;
+  pid: string;
+  num: number;
+  reason: string;
+}
+
+interface DateCursorVariables {
+  date: string;
 }
 
 interface SearchThreadsVariables {
@@ -292,10 +358,28 @@ export class LkongApi {
     return pageData;
   }
 
-  async getThreadDetail(tid: number, page: number, authorId: number = 0): Promise<ThreadPageData> {
+  async getThreadDetail(
+    tid: number,
+    page: number,
+    authorId: number = 0,
+    targetPid: string = ''
+  ): Promise<ThreadPageData> {
     const safePage = page < 1 ? 1 : page;
     let threadVariables: Object;
-    if (authorId > 0) {
+    if (targetPid.length > 0 && authorId > 0) {
+      const pidAuthorVars: ThreadPidAuthorVariables = {
+        tid: tid,
+        pid: targetPid,
+        authorid: authorId
+      };
+      threadVariables = pidAuthorVars;
+    } else if (targetPid.length > 0) {
+      const pidVars: ThreadPidVariables = {
+        tid: tid,
+        pid: targetPid
+      };
+      threadVariables = pidVars;
+    } else if (authorId > 0) {
       const authorVars: ThreadAuthorVariables = {
         tid: tid,
         page: safePage,
@@ -519,6 +603,170 @@ export class LkongApi {
       true
     );
     return parseMutationOk(result.data, 'delFavoriteGroup');
+  }
+
+  async replyThread(tid: number, contentJson: string, quotePid: string = ''): Promise<PostItem> {
+    let variables: Object;
+    if (quotePid.length > 0) {
+      const quoteVars: ReplyQuoteVariables = {
+        tid: tid,
+        content: contentJson,
+        pid: quotePid
+      };
+      variables = quoteVars;
+    } else {
+      const baseVars: ReplyThreadVariables = {
+        tid: tid,
+        content: contentJson
+      };
+      variables = baseVars;
+    }
+    const result = await GraphqlClient.getInstance().request(
+      'Reply',
+      variables,
+      REPLY_THREAD_MUTATION,
+      true
+    );
+    const post = parseReplyPost(result.data);
+    if (post.pid.length === 0) {
+      throw new ApiError(ErrorKind.PARSE, '回帖结果解析失败，请刷新帖子确认是否已发送。');
+    }
+    return post;
+  }
+
+  async createThread(fid: number, title: string, contentJson: string): Promise<number> {
+    const variables: NewThreadVariables = {
+      fid: fid,
+      title: title,
+      content: contentJson
+    };
+    const result = await GraphqlClient.getInstance().request(
+      'NewThread',
+      variables,
+      NEW_THREAD_MUTATION,
+      true
+    );
+    const tid = parseNewThreadTid(result.data);
+    if (tid <= 0) {
+      throw new ApiError(ErrorKind.PARSE, '发帖结果未返回有效主题 ID，请返回版块刷新查看。');
+    }
+    return tid;
+  }
+
+  async ratePost(tid: number, pid: string, num: number, reason: string): Promise<PostRateItem> {
+    const variables: RatePostVariables = {
+      tid: tid,
+      pid: pid,
+      num: num,
+      reason: reason
+    };
+    const result = await GraphqlClient.getInstance().request(
+      'Rate',
+      variables,
+      RATE_POST_MUTATION,
+      true
+    );
+    return parseRateResult(result.data);
+  }
+
+  async uploadImageBytes(data: ArrayBuffer, fileName: string, contentType: string): Promise<UploadedImage> {
+    const response = await HttpClient.getInstance().uploadImage(
+      AppConfig.UPLOAD_URL,
+      data,
+      fileName,
+      contentType
+    );
+    let parsed: Record<string, Object> = {};
+    try {
+      parsed = asRecord(JSON.parse(response.body) as Object);
+    } catch (error) {
+      if (response.statusCode !== 200) {
+        throw new ApiError(ErrorKind.HTTP, `图片上传失败（HTTP ${response.statusCode}）`, response.statusCode);
+      }
+      throw new ApiError(ErrorKind.PARSE, '图片上传返回数据无法解析。');
+    }
+
+    const errMsg = pickString(parsed, ['error']);
+    if (errMsg.length > 0) {
+      const normalized = errMsg.toLowerCase();
+      if (normalized.includes('not login') || errMsg.includes('登录')) {
+        throw new ApiError(ErrorKind.AUTH, '登录态已失效，请重新登录后再上传图片。');
+      }
+      throw new ApiError(ErrorKind.HTTP, errMsg);
+    }
+
+    const key = pickString(parsed, ['key']);
+    if (key.length === 0) {
+      throw new ApiError(ErrorKind.PARSE, '图床未返回有效图片 key。');
+    }
+    const uploaded: UploadedImage = {
+      key: key,
+      width: pickNumber(parsed, ['width']),
+      height: pickNumber(parsed, ['height'])
+    };
+    return uploaded;
+  }
+
+  async getNoticeCount(): Promise<NoticeCount> {
+    const emptyVariables: Record<string, Object> = {};
+    const result = await GraphqlClient.getInstance().request(
+      'GetNoticeCount',
+      emptyVariables,
+      GET_NOTICE_COUNT_QUERY,
+      true
+    );
+    return parseNoticeCount(result.data);
+  }
+
+  private buildDateVariables(date: string): Object {
+    if (date.length > 0) {
+      const cursorVars: DateCursorVariables = {
+        date: date
+      };
+      return cursorVars;
+    }
+    const emptyVars: Record<string, Object> = {};
+    return emptyVars;
+  }
+
+  async getNotices(date: string = ''): Promise<NoticeListResult> {
+    const result = await GraphqlClient.getInstance().request(
+      'ViewNotices',
+      this.buildDateVariables(date),
+      VIEW_NOTICES_QUERY,
+      true
+    );
+    return parseNoticeList(result.data);
+  }
+
+  async getAtMe(date: string = ''): Promise<AtMeListResult> {
+    const result = await GraphqlClient.getInstance().request(
+      'ViewAtMe',
+      this.buildDateVariables(date),
+      VIEW_ATME_QUERY,
+      true
+    );
+    return parseAtMeList(result.data);
+  }
+
+  async getRateNotices(date: string = ''): Promise<RateNoticeListResult> {
+    const result = await GraphqlClient.getInstance().request(
+      'ViewRateNotice',
+      this.buildDateVariables(date),
+      VIEW_RATE_NOTICE_QUERY,
+      true
+    );
+    return parseRateNoticeList(result.data);
+  }
+
+  async getFansNotices(date: string = ''): Promise<FanNoticeListResult> {
+    const result = await GraphqlClient.getInstance().request(
+      'ViewFansNotice',
+      this.buildDateVariables(date),
+      VIEW_FANS_NOTICE_QUERY,
+      true
+    );
+    return parseFansNoticeList(result.data);
   }
 }
 

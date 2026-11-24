@@ -178,7 +178,8 @@ struct FavoriteDetailPage {
       url: 'pages/ThreadPage',
       params: {
         tid: item.tid,
-        title: item.title
+        title: item.title,
+        pid: item.pid
       }
     }).catch(() => {
     });

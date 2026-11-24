@@ -1,13 +1,15 @@
 import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
-import { ApiError, CurrentUser, ErrorKind, Forum, HotThread, PunchInfo } from '../model/Models';
+import { ApiError, CurrentUser, ErrorKind, Forum, HotThread, NoticeCount, PunchInfo } from '../model/Models';
 import { LkongApi } from '../network/LkongApi';
 import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
 import { ForumOrderPrefs } from '../store/ForumOrderPrefs';
 import { ForumCard } from '../components/ForumCard';
 import { StateView } from '../components/StateView';
+import { KEY_NOTICE_COUNT_DIRTY } from '../utils/AppConfig';
 import { safeAvatarInitial } from '../utils/AvatarUtils';
+import { formatNoticeUnreadBadge, getVisibleUnreadTotal } from '../utils/PostComposerUtils';
 import { getTheme, KEY_IS_DARK } from '../utils/Theme';
 
 /**
@@ -39,9 +41,11 @@ struct Index {
   @State hotNeedLogin: boolean = false;
 
   @State avatarFailed: boolean = false;
+  @State noticeCount: NoticeCount | null = null;
 
   @StorageProp(KEY_IS_DARK) isDark: boolean = false;
   private bootstrapped: boolean = false;
+  private lastNoticeFetchAt: number = 0;
 
   onBackPress(): boolean {
     if (this.forumEditMode) {
@@ -69,6 +73,8 @@ struct Index {
       this.hotLoaded = false;
       this.hotError = '';
       this.hotNeedLogin = false;
+      this.noticeCount = null;
+      this.lastNoticeFetchAt = 0;
       return;
     }
 
@@ -78,6 +84,7 @@ struct Index {
       this.avatarFailed = false;
       this.loadForums();
       this.loadPunchInfo();
+      this.loadNoticeCount();
       if (this.activeTab === 1) {
         this.loadHotThreads();
       }
@@ -90,6 +97,11 @@ struct Index {
     }
     if (this.punchInfo === null && !this.punchLoading) {
       this.loadPunchInfo();
+    }
+    const noticeDirty = AppStorage.get<boolean>(KEY_NOTICE_COUNT_DIRTY);
+    if (noticeDirty === true || Date.now() - this.lastNoticeFetchAt > 30000) {
+      AppStorage.setOrCreate(KEY_NOTICE_COUNT_DIRTY, false);
+      this.loadNoticeCount();
     }
     if (this.activeTab === 1 && this.hotNeedLogin && !this.hotLoading) {
       this.loadHotThreads();
@@ -106,6 +118,7 @@ struct Index {
     await this.loadForums();
     if (this.loggedIn) {
       await this.loadPunchInfo();
+      this.loadNoticeCount();
     }
   }
 
@@ -187,6 +200,27 @@ struct Index {
     } finally {
       this.hotLoading = false;
     }
+  }
+
+  private async loadNoticeCount(): Promise<void> {
+    if (!CookieStore.getInstance().hasCookie()) {
+      this.noticeCount = null;
+      return;
+    }
+    try {
+      this.noticeCount = await LkongApi.getInstance().getNoticeCount();
+      this.lastNoticeFetchAt = Date.now();
+    } catch (error) {
+      // 未读数拉取失败不弹窗干扰首页浏览。
+    }
+  }
+
+  private noticeEntrySubtitle(): string {
+    const total = getVisibleUnreadTotal(this.noticeCount);
+    if (this.noticeCount === null || total <= 0) {
+      return '查看回复提醒、@我、评分与新增粉丝';
+    }
+    return `未读 ${total} 条（通知 ${this.noticeCount.noticeCount} · @我 ${this.noticeCount.atmeCount} · 评分 ${this.noticeCount.rateCount} · 粉丝 ${this.noticeCount.fansCount}）`;
   }
 
   private showMessage(message: string): void {
@@ -303,6 +337,11 @@ struct Index {
 
   private openFavorites(): void {
     router.pushUrl({ url: 'pages/FavoritesPage' }).catch(() => {
+    });
+  }
+
+  private openNotifications(): void {
+    router.pushUrl({ url: 'pages/NotificationsPage' }).catch(() => {
     });
   }
 
@@ -836,6 +875,14 @@ struct Index {
           this.renderPunchOrBannerCard()
 
           this.renderMineEntryRow(
+            '消息通知',
+            this.noticeEntrySubtitle(),
+            () => {
+              this.openNotifications();
+            }
+          )
+
+          this.renderMineEntryRow(
             '我的云端收藏夹',
             '管理云端收藏分组、查看已收藏帖子与楼层',
             () => {
@@ -900,20 +947,30 @@ struct Index {
   }
 
   @Builder
-  private renderBottomTab(index: number, label: string) {
+  private renderBottomTab(index: number, label: string, badgeCount: number = 0) {
     Column({ space: 4 }) {
       Divider()
         .width(24)
         .strokeWidth(3)
         .color(this.activeTab === index ? getTheme(this.isDark).accent : Color.Transparent)
-      Text(label)
-        .fontSize(13)
-        .fontWeight(this.activeTab === index ? FontWeight.Bold : FontWeight.Normal)
-        .fontColor(
-          this.activeTab === index
-            ? getTheme(this.isDark).accent
-            : getTheme(this.isDark).textSecondary
-        )
+      Row({ space: 3 }) {
+        Text(label)
+          .fontSize(13)
+          .fontWeight(this.activeTab === index ? FontWeight.Bold : FontWeight.Normal)
+          .fontColor(
+            this.activeTab === index
+              ? getTheme(this.isDark).accent
+              : getTheme(this.isDark).textSecondary
+          )
+        if (badgeCount > 0) {
+          Text(formatNoticeUnreadBadge(badgeCount))
+            .fontSize(9)
+            .fontColor(Color.White)
+            .backgroundColor(getTheme(this.isDark).badgeBg)
+            .borderRadius(8)
+            .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+        }
+      }
     }
     .layoutWeight(1)
     .height(54)
@@ -931,6 +988,28 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor(getTheme(this.isDark).textPrimary)
         Blank()
+        if (this.loggedIn && this.activeTab !== 3) {
+          Button(
+            getVisibleUnreadTotal(this.noticeCount) > 0
+              ? `消息 ${formatNoticeUnreadBadge(getVisibleUnreadTotal(this.noticeCount))}`
+              : '消息'
+          )
+            .fontSize(12)
+            .height(32)
+            .backgroundColor(
+              getVisibleUnreadTotal(this.noticeCount) > 0
+                ? getTheme(this.isDark).badgeBg
+                : getTheme(this.isDark).surfaceMuted
+            )
+            .fontColor(
+              getVisibleUnreadTotal(this.noticeCount) > 0
+                ? Color.White
+                : getTheme(this.isDark).textPrimary
+            )
+            .onClick(() => {
+              this.openNotifications();
+            })
+        }
         if (this.activeTab !== 3) {
           Button('搜索')
             .fontSize(12)
@@ -999,7 +1078,7 @@ struct Index {
         this.renderBottomTab(0, '版块')
         this.renderBottomTab(1, '热帖')
         this.renderBottomTab(2, '常用')
-        this.renderBottomTab(3, '我的')
+        this.renderBottomTab(3, '我的', getVisibleUnreadTotal(this.noticeCount))
       }
       .width('100%')
       .backgroundColor(getTheme(this.isDark).tabBarBg)

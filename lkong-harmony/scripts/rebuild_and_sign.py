@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rebuild the release APP under low CPU load (default: 6 cores, low priority)
+Rebuild the release APP under low CPU load (default: 4 cores, low priority)
 and sign it with the existing release signing material.
 
 The keystore password is read from sign/keystore-password.txt and is never printed.
@@ -38,8 +38,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--cores',
         type=int,
-        default=6,
-        help='Maximum CPU threads/cores to allow (default: 6)',
+        default=4,
+        help='Maximum CPU threads/cores to allow (default: 4)',
     )
     parser.add_argument(
         '--priority',

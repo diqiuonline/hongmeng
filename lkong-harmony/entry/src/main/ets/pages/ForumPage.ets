@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { ApiError, ErrorKind, ThreadSummary } from '../model/Models';
 import { LkongApi } from '../network/LkongApi';
@@ -6,6 +6,7 @@ import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
 import { StateView } from '../components/StateView';
 import { ThreadRow } from '../components/ThreadRow';
+import { KEY_FORUM_REFRESH_FID } from '../utils/AppConfig';
 import { formatTime } from '../utils/TimeUtils';
 import { getTheme, KEY_IS_DARK } from '../utils/Theme';
 
@@ -42,6 +43,13 @@ struct ForumPage {
   }
 
   onPageShow(): void {
+    const refreshFid = AppStorage.get<number>(KEY_FORUM_REFRESH_FID);
+    if (refreshFid !== undefined && refreshFid === this.fid && this.fid > 0) {
+      AppStorage.setOrCreate(KEY_FORUM_REFRESH_FID, 0);
+      this.page = 1;
+      this.loadPage();
+      return;
+    }
     if (this.needLogin && CookieStore.getInstance().hasCookie()) {
       this.loadPage();
     }
@@ -81,6 +89,26 @@ struct ForumPage {
 
   private goLogin(): void {
     router.pushUrl({ url: 'pages/LoginPage' }).catch(() => {
+    });
+  }
+
+  private openComposeNewThread(): void {
+    if (!CookieStore.getInstance().hasCookie()) {
+      try {
+        promptAction.showToast({ message: '请先登录后再发帖' });
+      } catch (error) {
+      }
+      this.goLogin();
+      return;
+    }
+    router.pushUrl({
+      url: 'pages/ComposePage',
+      params: {
+        mode: 'new',
+        fid: this.fid,
+        forumName: this.forumName
+      }
+    }).catch(() => {
     });
   }
 
@@ -142,6 +170,15 @@ struct ForumPage {
           .layoutWeight(1)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Button('发帖')
+          .fontSize(12)
+          .height(32)
+          .backgroundColor(getTheme(this.isDark).accentSolid)
+          .fontColor(Color.White)
+          .margin({ right: 6 })
+          .onClick(() => {
+            this.openComposeNewThread();
+          })
         Button('刷新')
           .fontSize(12)
           .height(32)

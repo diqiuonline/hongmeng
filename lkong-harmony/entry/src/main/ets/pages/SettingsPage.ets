@@ -225,7 +225,7 @@ struct SettingsPage {
             Text('• 不保存账号密码，密码仅用于本次登录请求。')
               .fontSize(12)
               .fontColor(getTheme(this.isDark).textSecondary)
-            Text('• Cookie 仅保存在本机，接口请求只发往 api.lkong.com（图片与表情来自 lkong.com）。')
+            Text('• Cookie 仅保存在本机，GraphQL 请求发往 api.lkong.com，图片上传发往 images.lkong.com/upload（浏览图片与表情不携带 Cookie）。')
               .fontSize(12)
               .fontColor(getTheme(this.isDark).textSecondary)
             Text('• 请求串行并保持至少 800ms 间隔，不进行批量抓取。')
