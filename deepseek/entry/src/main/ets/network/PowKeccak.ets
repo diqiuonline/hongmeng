@@ -132,12 +132,11 @@ function xorByteIntoState(sLo: Uint32Array, sHi: Uint32Array, pos: number, byteV
   }
 }
 
-export function keccak256Into(
+export function keccak256IntoState(
   input: Uint8Array,
   inputLen: number,
   startRound: number,
-  scratch: KeccakScratch,
-  outBytes: Uint8Array
+  scratch: KeccakScratch
 ): void {
   const sLo = scratch.sLo;
   const sHi = scratch.sHi;
@@ -181,6 +180,18 @@ export function keccak256Into(
     sLo, sHi, startRound,
     scratch.cLo, scratch.cHi, scratch.dLo, scratch.dHi, scratch.bLo, scratch.bHi
   );
+}
+
+export function keccak256Into(
+  input: Uint8Array,
+  inputLen: number,
+  startRound: number,
+  scratch: KeccakScratch,
+  outBytes: Uint8Array
+): void {
+  keccak256IntoState(input, inputLen, startRound, scratch);
+  const sLo = scratch.sLo;
+  const sHi = scratch.sHi;
 
   for (let lane = 0; lane < 4; lane++) {
     const lo = sLo[lane];

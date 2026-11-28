@@ -2,7 +2,7 @@
 
 基于 HarmonyOS NEXT（API 26 / Stage 模型 / ArkTS）开发的原生第三方 AI 对话客户端，直连第三方 AI 对话服务网页端（`https://chat.deepseek.com/api/v0/*`），不使用付费 API Key。应用由个人开发者独立开发，**仅用于本人学习与日常使用，不对外分发、不公开上架**。
 
-当前版本：**1.0.0（versionCode 1000000）**。
+当前版本：**1.2.0（versionCode 1002000）**。
 
 ---
 
@@ -13,7 +13,7 @@
 - **原生界面与交互**：手机端抽屉侧边栏 / 平板与折叠屏双栏自适应布局、浅色与深色双套主题、阅读字号切换。
 - **网页端协议直连**：
   - `AuthStore` 持久化网页端 `userToken`（Bearer Token）与会话 Cookie；
-  - `PowSolver` + `PowKeccak` 实现纯 ArkTS 32-bit split `Keccak-f[1600]` 与 **`DeepSeekHashV1`**（跳过 round 0，仅执行 rounds 1~23），通过 `@kit.ArkTS` `taskpool` 多线程并行求解 `X-Ds-Pow-Response`；
+  - `PowSolver` + `libpow_solver.so`（C++ NAPI 64 位多线程 `DeepSeekHashV1` 求解，跳过 round 0 仅执行 rounds 1~23，预吸收前缀并动态分片并发）+ `PowKeccak`（纯 ArkTS `taskpool` 协同取消兜底），毫秒级计算 `X-Ds-Pow-Response`；
   - `DeepSeekHttp` 基于 `@kit.NetworkKit` `http.requestInStream` + `util.TextDecoder` 实现 UTF-8 分片流式接收，严格校验 `https://chat.deepseek.com` 域名白名单；
   - `SsePatchParser` 实现网页端 JSON-Patch（`p` / `o` / `v` 状态树增量、`APPEND`/`SET`/`BATCH`、隐式路径延续、`ready`/`title`/`close` 事件）与 `THINK` / `SEARCH` / `RESPONSE` 分片解析；
   - `MessageTreeUtils` 还原 `messageId` / `parentId` 多分支消息树（编辑提问与重新生成切换 `< 1/2 >`）。
@@ -50,12 +50,16 @@
 ```text
 deepseek/
 ├─ AppScope/
-│  ├─ app.json5                        # bundleName: com.nihaoa.aichat, 1.0.0 / 1000000
+│  ├─ app.json5                        # bundleName: com.nihaoa.aichat, 1.2.0 / 1002000
 │  └─ resources/
 ├─ entry/
-│  ├─ oh-package.json5                 # @luvi/lv-markdown-in
+│  ├─ oh-package.json5                 # @luvi/lv-markdown-in, libpow_solver.so
 │  └─ src/main/
 │     ├─ module.json5                  # 仅 INTERNET 权限
+│     ├─ cpp/
+│     │  ├─ CMakeLists.txt             # Native C++ 编译配置
+│     │  ├─ pow_solver.cpp             # NAPI 64 位多线程 DeepSeekHashV1 求解器
+│     │  └─ types/libpow_solver/       # Native 模块 ArkTS 类型声明
 │     └─ ets/
 │        ├─ entryability/EntryAbility.ets
 │        ├─ entrybackupability/EntryBackupAbility.ets
@@ -92,7 +96,8 @@ deepseek/
 │           ├─ MessageTreeUtils.ets
 │           └─ TimeUtils.ets
 ├─ scripts/
-│  └─ rebuild_and_sign.py              # Release 构建与发布签名脚本
+│  ├─ build_low_cpu.py                 # 低优先级限核构建脚本（4 核 + IDLE 优先级）
+│  └─ rebuild_and_sign.py              # 低核 Release 构建与发布签名脚本
 ├─ sign/
 │  └─ README.md                        # AGC 发布证书与内测流程
 ├─ build-profile.json5                 # API 26；调试含 arm64 + x86_64，发版须排除 x86_64
@@ -112,12 +117,12 @@ deepseek/
 cd entry
 ohpm install
 
-# 2. 构建 Debug HAP（当前含 arm64 + x86_64，可直接装真机或模拟器）
+# 2. 构建 Debug HAP（默认低优先级 4 核限制，含 arm64 + x86_64，可直接装真机或模拟器）
 cd ..
-devecocli build --product default --build-mode debug
+python scripts/build_low_cpu.py --mode debug --cores 4
 
 # 3. 发版前先恢复 x86_64 排除（见 4.2），再构建 Release APP
-devecocli build --product default --build-mode release
+python scripts/build_low_cpu.py --mode release --cores 4
 ```
 
 ### 4.2 ABI 与包体积
@@ -134,16 +139,16 @@ devecocli build --product default --build-mode release
   ```
 
 - 单架构 Release 下载包约 **6.2 MB**，HAP 解压约 **18.2 MB**；
-- 体积主要来自 `@luvi/lv-markdown-in` 依赖的 LaTeX / 代码高亮原生库（`liblatex.so`、`libcangjie-*`、`libc++_shared.so` 等），业务字节码仅约 1 MB。
+- 体积主要来自 `@luvi/lv-markdown-in` 依赖的 LaTeX / 代码高亮原生库（`liblatex.so`、`libcangjie-*`、`libc++_shared.so` 等），业务字节码仅约 1 MB，自研 `libpow_solver.so` 原生 PoW 求解库仅几十 KB。
 
 ### 4.3 不开启开发者模式的真机部署（AGC 仅测试）
 
 1. 在 AppGallery Connect 创建 HarmonyOS 应用，包名 **`com.nihaoa.aichat`**（创建后不可修改），应用名称 `AI 对话助手`；
 2. 复用现有发布证书 `sign/deepseek.cer` / `deepseek.p12`，为新应用申请**新的发布 Profile**，下载后命名为 `sign/aichatRelease.p7b`（详见 [sign/README.md](sign/README.md)）；
-3. 运行签名脚本：
+3. 运行低核构建与签名脚本：
 
    ```bash
-   python scripts/rebuild_and_sign.py
+   python scripts/rebuild_and_sign.py --cores 4
    ```
 
    输出：`build/outputs/default/deepseek-default-signed.app`；
@@ -178,4 +183,6 @@ devecocli build --product default --build-mode release
 
 ## 7. 版本记录
 
+- **1.2.0（1002000）**：新增 Native C++ NAPI 64 位多线程 `DeepSeekHashV1` PoW 求解器（`libpow_solver.so`）与 ArkTS `taskpool` 协同取消兜底，解决发送消息偶发卡顿 10 余秒问题；新对话创建与 PoW 挑战并行请求；补充联网搜索/连接/思考阶段提示与防停止竞态保护。
+- **1.1.0（1001000）**：默认开启「深度思考」与「智能搜索」；修复流式输出长内容时因 `ForEach` 重建与滚动竞争导致的闪屏问题；移除首页内置推荐卡片。
 - **1.0.0（1000000）**：新应用基线，包名 `com.nihaoa.aichat`；移除语音输入与麦克风权限；Release 仅打包 `arm64-v8a`；更换为中性图标。

@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """
-Rebuild the release APP and sign it with release signing material in sign/.
+Rebuild the release APP under low CPU load (default: 4 cores, low priority)
+and sign it with release signing material in sign/.
 
 The keystore password is read from sign/keystore-password.txt and is never printed.
 """
 
+import argparse
 import pathlib
 import subprocess
+import sys
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from build_low_cpu import apply_low_cpu_limits, run_hvigor_build  # noqa: E402
+
+ROOT = SCRIPT_DIR.parent
 SIGN_DIR = ROOT / 'sign'
 UNSIGNED_APP = ROOT / 'build' / 'outputs' / 'default' / 'deepseek-default-unsigned.app'
 SIGNED_APP = ROOT / 'build' / 'outputs' / 'default' / 'deepseek-default-signed.app'
@@ -22,7 +31,32 @@ SIGN_TOOL = pathlib.Path(
 JAVA = pathlib.Path(r'D:/Program Files/Huawei/DevEco Studio/jbr/bin/java.exe')
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description='Build release APP under low CPU usage and sign with release cert.'
+    )
+    parser.add_argument(
+        '--cores',
+        type=int,
+        default=4,
+        help='Maximum CPU threads/cores to allow (default: 4)',
+    )
+    parser.add_argument(
+        '--priority',
+        choices=['low', 'below_normal'],
+        default='low',
+        help='Windows process priority class (default: low)',
+    )
+    parser.add_argument(
+        '--stop-daemon',
+        action='store_true',
+        help='Stop existing Hvigor daemons before building',
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     required = [PASSWORD_FILE, KEYSTORE, CERT, PROFILE, SIGN_TOOL, JAVA]
     for path in required:
         if not path.exists():
@@ -30,12 +64,14 @@ def main() -> None:
 
     password = PASSWORD_FILE.read_text(encoding='utf-8').strip()
 
-    print('Building release APP...')
-    subprocess.run(
-        'devecocli build --product default --build-mode release',
-        cwd=ROOT,
-        check=True,
-        shell=True,
+    apply_low_cpu_limits(cores=args.cores, priority=args.priority)
+    print('Building release APP (low-CPU mode)...')
+    run_hvigor_build(
+        mode='release',
+        product='default',
+        cores=args.cores,
+        priority=args.priority,
+        stop_daemon=args.stop_daemon,
     )
 
     if not UNSIGNED_APP.exists():

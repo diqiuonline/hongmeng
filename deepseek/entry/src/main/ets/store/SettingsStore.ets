@@ -15,7 +15,7 @@ export class SettingsStore {
   private themeMode: ThemeMode = 'system';
   private fontSizeLevel: FontSizeLevel = 'standard';
   private defaultThinking: boolean = true;
-  private defaultSearch: boolean = false;
+  private defaultSearch: boolean = true;
   private autoCollapseThinking: boolean = false;
 
   static getInstance(): SettingsStore {
@@ -37,11 +37,12 @@ export class SettingsStore {
         this.fontSizeLevel = fontRaw;
       }
       this.defaultThinking = Boolean(await this.prefs.get(KEY_DEFAULT_THINKING, true));
-      this.defaultSearch = Boolean(await this.prefs.get(KEY_DEFAULT_SEARCH, false));
+      this.defaultSearch = Boolean(await this.prefs.get(KEY_DEFAULT_SEARCH, true));
       this.autoCollapseThinking = Boolean(await this.prefs.get(KEY_AUTO_COLLAPSE_THINKING, false));
     } catch (error) {
       this.prefs = null;
     }
+    AppStorage.setOrCreate('bodyFontSize', this.getBodyFontSize());
   }
 
   getThemeMode(): ThemeMode {
@@ -82,6 +83,7 @@ export class SettingsStore {
 
   async setFontSizeLevel(level: FontSizeLevel): Promise<void> {
     this.fontSizeLevel = level;
+    AppStorage.setOrCreate('bodyFontSize', this.getBodyFontSize());
     await this.saveString(KEY_FONT_SIZE, level);
   }
 

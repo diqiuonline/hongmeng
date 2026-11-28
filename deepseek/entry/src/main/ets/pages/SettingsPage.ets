@@ -15,7 +15,7 @@ struct SettingsPage {
   @State themeMode: ThemeMode = 'system';
   @State fontSizeLevel: FontSizeLevel = 'standard';
   @State defaultThinking: boolean = true;
-  @State defaultSearch: boolean = false;
+  @State defaultSearch: boolean = true;
   @State autoCollapseThinking: boolean = false;
   @State confirmClearAll: boolean = false;
   @State clearingAll: boolean = false;

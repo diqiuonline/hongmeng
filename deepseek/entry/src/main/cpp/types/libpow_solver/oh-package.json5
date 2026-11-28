@@ -1,0 +1,6 @@
+{
+  "name": "libpow_solver.so",
+  "types": "./Index.d.ts",
+  "version": "1.0.0",
+  "description": "Native 64-bit multi-threaded DeepSeekHashV1 PoW solver."
+}

@@ -274,7 +274,9 @@ export class DeepSeekApi {
   async startCompletionStream(
     params: CompletionParams,
     callbacks: SsePatchCallbacks,
-    onStreamError: (error: ApiError) => void
+    onStreamError: (error: ApiError) => void,
+    preFetchedChallenge?: PowChallenge,
+    onStage?: (stage: 'pow' | 'connecting') => void
   ): Promise<StreamHandle> {
     const payload: Record<string, Object | null> = {
       'chat_session_id': params.sessionId,
@@ -286,7 +288,14 @@ export class DeepSeekApi {
       'preempt': false,
       'client_stream_id': generateClientStreamId()
     };
-    return this.openPowSseStream('/api/v0/chat/completion', payload, callbacks, onStreamError);
+    return this.openPowSseStream(
+      '/api/v0/chat/completion',
+      payload,
+      callbacks,
+      onStreamError,
+      preFetchedChallenge,
+      onStage
+    );
   }
 
   async startRegenerateStream(
@@ -295,7 +304,9 @@ export class DeepSeekApi {
     thinkingEnabled: boolean,
     searchEnabled: boolean,
     callbacks: SsePatchCallbacks,
-    onStreamError: (error: ApiError) => void
+    onStreamError: (error: ApiError) => void,
+    preFetchedChallenge?: PowChallenge,
+    onStage?: (stage: 'pow' | 'connecting') => void
   ): Promise<StreamHandle> {
     const payload: Record<string, Object> = {
       'chat_session_id': sessionId,
@@ -305,17 +316,34 @@ export class DeepSeekApi {
       'preempt': false,
       'client_stream_id': generateClientStreamId()
     };
-    return this.openPowSseStream('/api/v0/chat/regenerate', payload, callbacks, onStreamError);
+    return this.openPowSseStream(
+      '/api/v0/chat/regenerate',
+      payload,
+      callbacks,
+      onStreamError,
+      preFetchedChallenge,
+      onStage
+    );
   }
 
   private async openPowSseStream(
     targetPath: string,
     payload: Object,
     callbacks: SsePatchCallbacks,
-    onStreamError: (error: ApiError) => void
+    onStreamError: (error: ApiError) => void,
+    preFetchedChallenge?: PowChallenge,
+    onStage?: (stage: 'pow' | 'connecting') => void
   ): Promise<StreamHandle> {
-    const challenge = await this.createPowChallenge(targetPath);
+    if (onStage !== undefined) {
+      onStage('pow');
+    }
+    const challenge = preFetchedChallenge !== undefined
+      ? preFetchedChallenge
+      : await this.createPowChallenge(targetPath);
     const powHeader = await PowSolver.solve(challenge);
+    if (onStage !== undefined) {
+      onStage('connecting');
+    }
 
     const extraHeaders: Record<string, string> = {
       'X-Ds-Pow-Response': powHeader
@@ -575,7 +603,7 @@ function parseHistoryMessage(rec: Record<string, Object>): ChatMessage | null {
     feedback = 'dislike';
   }
 
-  return {
+  return new ChatMessage({
     messageId: messageId,
     parentId: parentId,
     role: role,
@@ -589,7 +617,7 @@ function parseHistoryMessage(rec: Record<string, Object>): ChatMessage | null {
     insertedAt: pickNumber(rec, ['inserted_at']),
     feedback: feedback,
     accumulatedTokenUsage: pickNumber(rec, ['accumulated_token_usage'])
-  };
+  });
 }
 
 function readUriBytes(uri: string): Uint8Array {

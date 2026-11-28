@@ -9,13 +9,13 @@
 | 项目 | 目录 | 包名 | 版本 | 文档 |
 |---|---|---|---|---|
 | **龙空 HarmonyOS 客户端** | [`lkong-harmony/`](./lkong-harmony/) | `com.nihaoa.lkong` | `1.5.0` | [README](./lkong-harmony/README.md) · [更新日志](./lkong-harmony/CHANGELOG.md) |
-| **AI 对话助手** | [`deepseek/`](./deepseek/) | `com.nihaoa.aichat` | `1.0.0` | [README](./deepseek/README.md) |
+| **AI 对话助手** | [`deepseek/`](./deepseek/) | `com.nihaoa.aichat` | `1.2.0` | [README](./deepseek/README.md) |
 
 ### 龙空 HarmonyOS 客户端
 龙的天空论坛非官方原生客户端（API 26 / ArkTS），基于官方 GraphQL API 实现：首页 / 版块 / 主页 / 通知全站多 Tab 左右滑动、版块排序与今日热门、每日自动签到、综合搜索、云端收藏夹、富文本 / 动态表情 / 图片混排与缩放保存、发帖 / 回帖 / 编辑 / 传图、龙币评分、个人帖子详情与站内私信。详细说明见 [lkong-harmony/README.md](./lkong-harmony/README.md) 与 [更新日志](./lkong-harmony/CHANGELOG.md)。
 
 ### AI 对话助手
-原生第三方 AI 对话客户端，直连网页端协议，支持纯 ArkTS + `taskpool` 并行求解 `DeepSeekHashV1` PoW、流式 SSE JSON-Patch 解析、多分支消息树、Markdown / 代码块 / LaTeX 公式渲染及图片 / 文档 OCR 上传。详细说明见 [deepseek/README.md](./deepseek/README.md)。
+原生第三方 AI 对话客户端，直连网页端协议，支持 Native C++ NAPI 多线程 + 纯 ArkTS `taskpool` 求解 `DeepSeekHashV1` PoW、流式 SSE JSON-Patch 解析、多分支消息树、Markdown / 代码块 / LaTeX 公式渲染及图片 / 文档 OCR 上传。详细说明见 [deepseek/README.md](./deepseek/README.md)。
 
 ---
 
@@ -59,8 +59,13 @@ python scripts/rebuild_and_sign.py --cores 4
 #### AI 对话助手（`deepseek/`）
 
 ```powershell
-cd deepseek/entry
-ohpm install
+cd deepseek
+# 首次构建前先在 entry 目录安装依赖（cd entry && ohpm install）
+# Debug 构建（默认 4 核、低优先级）
+python scripts/build_low_cpu.py --mode debug --cores 4
+
+# Release 构建并发布签名（需确保 sign/ 下已配置签名材料，且 build-profile.json5 已排除 x86_64）
+python scripts/rebuild_and_sign.py --cores 4
 ```
 
 `deepseek/` 的 ABI 架构过滤、发布签名与详细构建说明请参考 [deepseek/README.md](./deepseek/README.md)，低 CPU 限核构建方式请遵循 [AGENTS.md](./AGENTS.md)。

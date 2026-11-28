@@ -12,6 +12,7 @@ import {
   ChatSession,
   MessageFeedback,
   PickedLocalFile,
+  PowChallenge,
   SearchSource,
   UploadedAttachment,
   UserProfile
@@ -26,17 +27,49 @@ import { copyTextToClipboard } from '../utils/ClipboardUtils';
 import { buildActivePath, getBranchInfo, parentKey } from '../utils/MessageTreeUtils';
 
 
-interface StarterPrompt {
-  title: string;
-  prompt: string;
+function isSameBranchInfo(a: BranchInfo, b: BranchInfo): boolean {
+  if (a.currentIndex !== b.currentIndex || a.totalCount !== b.totalCount) {
+    return false;
+  }
+  if (a.siblingIds.length !== b.siblingIds.length) {
+    return false;
+  }
+  for (let i = 0; i < a.siblingIds.length; i++) {
+    if (a.siblingIds[i] !== b.siblingIds[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
-const STARTER_PROMPTS: StarterPrompt[] = [
-  { title: '深度推理', prompt: '用通俗直观的例子解释量子纠缠，并对比常见误解。' },
-  { title: '代码架构', prompt: '帮我设计一个高并发本地任务队列，给出核心状态机和异常恢复策略。' },
-  { title: '联网检索', prompt: '总结近期鸿蒙 HarmonyOS NEXT 开发生态的重要更新与实践建议。' },
-  { title: '效率写作', prompt: '把下面这段工作周报改写得更精炼、重点突出、有量化结果：' }
-];
+function areStringArraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areSearchResultsEqual(a: SearchSource[], b: SearchSource[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].url !== b[i].url ||
+      a[i].title !== b[i].title ||
+      a[i].snippet !== b[i].snippet ||
+      a[i].citeIndex !== b[i].citeIndex
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 @Entry
 @Component
@@ -57,30 +90,32 @@ struct Index {
   @State loadingMessages: boolean = false;
   @State messagesError: string = '';
 
-  @State allMessages: ChatMessage[] = [];
+  private allMessages: ChatMessage[] = [];
   @State displayMessages: ChatMessage[] = [];
 
   @State promptText: string = '';
   @State thinkingEnabled: boolean = true;
-  @State searchEnabled: boolean = false;
+  @State searchEnabled: boolean = true;
   @State pendingAttachments: UploadedAttachment[] = [];
   @State editingUserMessage: ChatMessage | null = null;
 
   @State isStreaming: boolean = false;
-  @State streamingMessageId: number = 0;
+  private streamingMessageId: number = 0;
   @State userScrolledUp: boolean = false;
   @State riskControlBanner: string = '';
-
-  @State bodyFontSize: number = 15;
 
   private branchSelection: Map<string, number> = new Map<string, number>();
   private activeStreamHandle: StreamHandle | null = null;
   private listScroller: Scroller = new Scroller();
   private throttleTimerId: number = -1;
+  private scrollTimerId: number = -1;
   private pendingSnapshot: SseStreamSnapshot | null = null;
   private activeTempUserId: number = -1001;
   private activeTempAssistantId: number = -1002;
   private activeParentId: number | null = null;
+  private activeStreamingMessage: ChatMessage | null = null;
+  private lastScrollFromUser: boolean = false;
+  private streamRequestSeq: number = 0;
 
   aboutToAppear(): void {
     this.bootstrap();
@@ -88,6 +123,7 @@ struct Index {
 
   aboutToDisappear(): void {
     this.clearThrottleTimer();
+    this.clearScrollTimer();
     if (this.activeStreamHandle !== null) {
       this.activeStreamHandle.abort();
       this.activeStreamHandle = null;
@@ -96,7 +132,7 @@ struct Index {
   }
 
   onPageShow(): void {
-    this.bodyFontSize = SettingsStore.getInstance().getBodyFontSize();
+    AppStorage.setOrCreate('bodyFontSize', SettingsStore.getInstance().getBodyFontSize());
     const nowLoggedIn = AuthStore.getInstance().hasAuth();
     const needReload = AppStorage.get<boolean>('needSessionReload') === true;
     if (needReload) {
@@ -126,7 +162,7 @@ struct Index {
     await SettingsStore.getInstance().ensureInit(ctx);
     await AuthStore.getInstance().ensureInit(ctx);
 
-    this.bodyFontSize = SettingsStore.getInstance().getBodyFontSize();
+    AppStorage.setOrCreate('bodyFontSize', SettingsStore.getInstance().getBodyFontSize());
     this.thinkingEnabled = SettingsStore.getInstance().getDefaultThinking();
     this.searchEnabled = SettingsStore.getInstance().getDefaultSearch();
     this.loggedIn = AuthStore.getInstance().hasAuth();
@@ -235,6 +271,8 @@ struct Index {
   private async selectSession(session: ChatSession): Promise<void> {
     if (this.isStreaming) {
       this.stopActiveStream();
+    } else {
+      this.streamRequestSeq++;
     }
     this.drawerOpen = false;
     this.currentSessionId = session.id;
@@ -244,6 +282,7 @@ struct Index {
     this.branchSelection = new Map<string, number>();
     this.messagesError = '';
     this.userScrolledUp = false;
+    this.lastScrollFromUser = false;
     await this.loadMessagesForSession(session.id);
   }
 
@@ -257,7 +296,7 @@ struct Index {
       }
       this.allMessages = list;
       this.rebuildDisplayMessages();
-      this.scrollToBottomSoon();
+      this.scrollToBottomSoon(30);
     } catch (error) {
       this.handleApiError(error, '对话内容加载失败');
       if (error instanceof ApiError) {
@@ -273,7 +312,10 @@ struct Index {
   private resetCurrentChat(): void {
     if (this.isStreaming) {
       this.stopActiveStream();
+    } else {
+      this.streamRequestSeq++;
     }
+    this.clearScrollTimer();
     this.currentSessionId = '';
     this.currentSessionTitle = '新对话';
     this.allMessages = [];
@@ -283,11 +325,26 @@ struct Index {
     this.pendingAttachments = [];
     this.messagesError = '';
     this.userScrolledUp = false;
+    this.lastScrollFromUser = false;
+    this.activeStreamingMessage = null;
+    this.thinkingEnabled = SettingsStore.getInstance().getDefaultThinking();
+    this.searchEnabled = SettingsStore.getInstance().getDefaultSearch();
     this.drawerOpen = false;
   }
 
   private rebuildDisplayMessages(): void {
-    this.displayMessages = buildActivePath(this.allMessages, this.branchSelection);
+    const path = buildActivePath(this.allMessages, this.branchSelection);
+    this.syncBranchInfosFor(path);
+    this.displayMessages = path;
+  }
+
+  private syncBranchInfosFor(list: ChatMessage[]): void {
+    for (const msg of list) {
+      const nextInfo = getBranchInfo(this.allMessages, msg);
+      if (!isSameBranchInfo(msg.branchInfo, nextInfo)) {
+        msg.branchInfo = nextInfo;
+      }
+    }
   }
 
   private async handleRenameSession(sessionId: string, newTitle: string): Promise<void> {
@@ -476,12 +533,17 @@ struct Index {
     this.editingUserMessage = null;
     this.userScrolledUp = false;
 
+    let preFetchedChallenge: PowChallenge | undefined = undefined;
     try {
       if (this.currentSessionId.length === 0) {
+        const challengePromise: Promise<PowChallenge | undefined> = DeepSeekApi.getInstance()
+          .createPowChallenge('/api/v0/chat/completion')
+          .catch((): PowChallenge | undefined => undefined);
         const created = await DeepSeekApi.getInstance().createSession();
         this.currentSessionId = created.id;
         this.currentSessionTitle = created.title;
         this.sessions = [created, ...this.sessions];
+        preFetchedChallenge = await challengePromise;
       }
     } catch (error) {
       this.promptText = promptToSend;
@@ -496,7 +558,7 @@ struct Index {
     this.activeTempAssistantId = tempAssistantId;
     this.activeParentId = parentId;
 
-    const tempUserMsg: ChatMessage = {
+    const tempUserMsg = new ChatMessage({
       messageId: tempUserId,
       parentId: parentId,
       role: 'USER',
@@ -510,9 +572,9 @@ struct Index {
       insertedAt: Math.floor(Date.now() / 1000),
       feedback: 'none',
       accumulatedTokenUsage: 0
-    };
+    });
 
-    const tempAssistantMsg: ChatMessage = {
+    const tempAssistantMsg = new ChatMessage({
       messageId: tempAssistantId,
       parentId: tempUserId,
       role: 'ASSISTANT',
@@ -525,14 +587,18 @@ struct Index {
       status: 'WIP',
       insertedAt: Math.floor(Date.now() / 1000),
       feedback: 'none',
-      accumulatedTokenUsage: 0
-    };
+      accumulatedTokenUsage: 0,
+      isActiveStream: true,
+      stageText: '正在安全校验...'
+    });
 
+    this.activeStreamingMessage = tempAssistantMsg;
+    this.lastScrollFromUser = false;
     this.branchSelection.set(parentKey(parentId), tempUserId);
     this.branchSelection.set(parentKey(tempUserId), tempAssistantId);
     this.allMessages = [...this.allMessages, tempUserMsg, tempAssistantMsg];
     this.rebuildDisplayMessages();
-    this.scrollToBottomSoon();
+    this.scrollToBottomSoon(30);
 
     await this.launchStream(
       this.currentSessionId,
@@ -541,7 +607,8 @@ struct Index {
       refFileIds,
       tempUserId,
       tempAssistantId,
-      false
+      false,
+      preFetchedChallenge
     );
   }
 
@@ -576,7 +643,7 @@ struct Index {
     this.activeTempAssistantId = tempAssistantId;
     this.activeParentId = userMsg.parentId;
 
-    const tempAssistantMsg: ChatMessage = {
+    const tempAssistantMsg = new ChatMessage({
       messageId: tempAssistantId,
       parentId: userMsg.messageId,
       role: 'ASSISTANT',
@@ -589,14 +656,18 @@ struct Index {
       status: 'WIP',
       insertedAt: Math.floor(Date.now() / 1000),
       feedback: 'none',
-      accumulatedTokenUsage: 0
-    };
+      accumulatedTokenUsage: 0,
+      isActiveStream: true,
+      stageText: '正在安全校验...'
+    });
 
+    this.activeStreamingMessage = tempAssistantMsg;
+    this.lastScrollFromUser = false;
     this.branchSelection.set(parentKey(userMsg.messageId), tempAssistantId);
     this.allMessages = [...this.allMessages, tempAssistantMsg];
     this.rebuildDisplayMessages();
     this.userScrolledUp = false;
-    this.scrollToBottomSoon();
+    this.scrollToBottomSoon(30);
 
     await this.launchStream(
       this.currentSessionId,
@@ -605,7 +676,8 @@ struct Index {
       refFileIds,
       userMsg.messageId,
       tempAssistantId,
-      true
+      true,
+      undefined
     );
   }
 
@@ -616,8 +688,10 @@ struct Index {
     refFileIds: string[],
     trackedUserId: number,
     trackedAssistantId: number,
-    isRegenerate: boolean
+    isRegenerate: boolean,
+    preFetchedChallenge?: PowChallenge
   ): Promise<void> {
+    const reqSeq = ++this.streamRequestSeq;
     this.isStreaming = true;
     this.streamingMessageId = trackedAssistantId;
     this.pendingSnapshot = null;
@@ -628,6 +702,9 @@ struct Index {
     try {
       const streamCallbacks: SsePatchCallbacks = {
         onReady: (reqId: number, respId: number): void => {
+          if (reqSeq !== this.streamRequestSeq) {
+            return;
+          }
           const nextUserId = (!isRegenerate && reqId > 0) ? reqId : currentUserId;
           const nextAssistantId = respId > 0 ? respId : currentAssistantId;
 
@@ -638,24 +715,30 @@ struct Index {
             this.branchSelection.set(parentKey(nextUserId), nextAssistantId);
           }
 
-          this.allMessages = this.allMessages.map((m: ChatMessage): ChatMessage => {
-            if (!isRegenerate && m.messageId === currentUserId) {
-              return this.cloneMessageWithId(m, nextUserId, m.parentId);
+          if (!isRegenerate && nextUserId !== currentUserId) {
+            const userMsg = this.findMessageById(currentUserId);
+            if (userMsg !== null) {
+              userMsg.messageId = nextUserId;
             }
-            if (m.messageId === currentAssistantId) {
-              return this.cloneMessageWithId(m, nextAssistantId, nextUserId);
-            }
-            return m;
-          });
+          }
+          const assistantMsg = this.findMessageById(currentAssistantId);
+          if (assistantMsg !== null) {
+            assistantMsg.messageId = nextAssistantId;
+            assistantMsg.parentId = nextUserId;
+            this.activeStreamingMessage = assistantMsg;
+          }
 
           currentUserId = nextUserId;
           currentAssistantId = nextAssistantId;
           this.streamingMessageId = currentAssistantId;
           this.activeTempUserId = currentUserId;
           this.activeTempAssistantId = currentAssistantId;
-          this.rebuildDisplayMessages();
+          this.syncBranchInfosFor(this.displayMessages);
         },
         onTitle: (title: string): void => {
+          if (reqSeq !== this.streamRequestSeq) {
+            return;
+          }
           if (this.currentSessionId === sessionId) {
             this.currentSessionTitle = title;
           }
@@ -673,52 +756,97 @@ struct Index {
           });
         },
         onUpdate: (snapshot: SseStreamSnapshot): void => {
+          if (reqSeq !== this.streamRequestSeq) {
+            return;
+          }
+          const activeTarget = this.resolveStreamingTarget(currentAssistantId);
+          const waitingFirstOutput =
+            activeTarget !== null &&
+            activeTarget.thinkingContent.length === 0 &&
+            activeTarget.content.length === 0;
+          if (waitingFirstOutput) {
+            this.clearThrottleTimer();
+            this.pendingSnapshot = null;
+            this.applySnapshotToAssistant(currentAssistantId, snapshot, false);
+            return;
+          }
           this.pendingSnapshot = snapshot;
           if (this.throttleTimerId === -1) {
             this.throttleTimerId = setTimeout(() => {
               this.throttleTimerId = -1;
-              if (this.pendingSnapshot !== null) {
-                this.applySnapshotToAssistant(currentAssistantId, this.pendingSnapshot, false);
+              if (reqSeq !== this.streamRequestSeq) {
+                this.pendingSnapshot = null;
+                return;
               }
-            }, 60);
+              const snap = this.pendingSnapshot;
+              this.pendingSnapshot = null;
+              if (snap !== null) {
+                this.applySnapshotToAssistant(currentAssistantId, snap, false);
+              }
+            }, 100);
           }
         },
         onFinish: (snapshot: SseStreamSnapshot): void => {
+          if (reqSeq !== this.streamRequestSeq) {
+            return;
+          }
           this.clearThrottleTimer();
           this.pendingSnapshot = null;
           this.applySnapshotToAssistant(currentAssistantId, snapshot, true);
           this.isStreaming = false;
           this.activeStreamHandle = null;
+          this.activeStreamingMessage = null;
           this.touchSessionUpdatedAt(sessionId);
         },
         onError: (errMsg: string): void => {
+          if (reqSeq !== this.streamRequestSeq) {
+            return;
+          }
           this.clearThrottleTimer();
+          this.pendingSnapshot = null;
           this.isStreaming = false;
           this.activeStreamHandle = null;
           this.markAssistantError(currentAssistantId, errMsg);
+          this.activeStreamingMessage = null;
           this.showToast(errMsg);
         }
       };
 
       const onStreamError = (apiErr: ApiError): void => {
+        if (reqSeq !== this.streamRequestSeq) {
+          return;
+        }
         this.clearThrottleTimer();
+        this.pendingSnapshot = null;
         this.isStreaming = false;
         this.activeStreamHandle = null;
         this.markAssistantError(currentAssistantId, apiErr.message);
+        this.activeStreamingMessage = null;
         this.handleApiError(apiErr, '生成回复失败');
       };
 
-      if (isRegenerate) {
-        this.activeStreamHandle = await DeepSeekApi.getInstance().startRegenerateStream(
+      const onStage = (stage: 'pow' | 'connecting'): void => {
+        if (reqSeq !== this.streamRequestSeq) {
+          return;
+        }
+        const target = this.resolveStreamingTarget(currentAssistantId);
+        if (target !== null) {
+          target.stageText = stage === 'pow' ? '正在安全校验...' : '正在连接 DeepSeek...';
+        }
+      };
+
+      const handle = isRegenerate
+        ? await DeepSeekApi.getInstance().startRegenerateStream(
           sessionId,
           trackedUserId,
           this.thinkingEnabled,
           this.searchEnabled,
           streamCallbacks,
-          onStreamError
-        );
-      } else {
-        this.activeStreamHandle = await DeepSeekApi.getInstance().startCompletionStream(
+          onStreamError,
+          preFetchedChallenge,
+          onStage
+        )
+        : await DeepSeekApi.getInstance().startCompletionStream(
           {
             sessionId: sessionId,
             parentMessageId: parentMessageId,
@@ -728,17 +856,56 @@ struct Index {
             searchEnabled: this.searchEnabled
           },
           streamCallbacks,
-          onStreamError
+          onStreamError,
+          preFetchedChallenge,
+          onStage
         );
+
+      if (reqSeq !== this.streamRequestSeq) {
+        handle.abort();
+        return;
       }
+      this.activeStreamHandle = handle;
     } catch (error) {
+      if (reqSeq !== this.streamRequestSeq) {
+        return;
+      }
       this.clearThrottleTimer();
+      this.pendingSnapshot = null;
       this.isStreaming = false;
       this.activeStreamHandle = null;
       const errMsg = error instanceof ApiError ? error.message : '发起对话失败，请稍后重试。';
       this.markAssistantError(currentAssistantId, errMsg);
+      this.activeStreamingMessage = null;
       this.handleApiError(error, '发起对话失败');
     }
+  }
+
+  private resolveStreamingTarget(assistantId: number): ChatMessage | null {
+    if (
+      this.activeStreamingMessage !== null &&
+      (this.activeStreamingMessage.messageId === assistantId ||
+        this.activeStreamingMessage.messageId === this.streamingMessageId ||
+        this.activeStreamingMessage.messageId === this.activeTempAssistantId)
+    ) {
+      return this.activeStreamingMessage;
+    }
+    return this.findMessageById(assistantId);
+  }
+
+  private findMessageById(messageId: number): ChatMessage | null {
+    if (
+      this.activeStreamingMessage !== null &&
+      this.activeStreamingMessage.messageId === messageId
+    ) {
+      return this.activeStreamingMessage;
+    }
+    for (const m of this.allMessages) {
+      if (m.messageId === messageId) {
+        return m;
+      }
+    }
+    return null;
   }
 
   private applySnapshotToAssistant(
@@ -752,14 +919,32 @@ struct Index {
       this.streamingMessageId = targetId;
     }
 
+    let target: ChatMessage | null = null;
+    if (
+      this.activeStreamingMessage !== null &&
+      (this.activeStreamingMessage.messageId === assistantId ||
+        this.activeStreamingMessage.messageId === targetId ||
+        this.activeStreamingMessage.messageId === this.streamingMessageId)
+    ) {
+      target = this.activeStreamingMessage;
+    } else {
+      target = this.findMessageById(targetId) ?? this.findMessageById(assistantId);
+    }
+    if (target === null) {
+      return;
+    }
+
     let thinkingText = '';
     let thinkingElapsed = 0;
+    let hasThink = false;
+    let hasSearch = false;
     const contentParts: string[] = [];
     const queries: string[] = [];
     const results: SearchSource[] = [];
 
     for (const frag of snapshot.fragments) {
       if (frag.type === 'THINK') {
+        hasThink = true;
         if (frag.content.length > 0) {
           thinkingText += (thinkingText.length > 0 ? '\n' : '') + frag.content;
         }
@@ -767,6 +952,7 @@ struct Index {
           thinkingElapsed = frag.elapsedSecs;
         }
       } else if (frag.type === 'SEARCH') {
+        hasSearch = true;
         for (const q of frag.queries) {
           queries.push(q);
         }
@@ -785,63 +971,75 @@ struct Index {
       ? (snapshot.status === 'WIP' ? 'FINISHED' : snapshot.status)
       : snapshot.status;
 
-    let updated = false;
-    this.allMessages = this.allMessages.map((m: ChatMessage): ChatMessage => {
-      if (m.messageId === assistantId || m.messageId === targetId) {
-        updated = true;
-        return {
-          messageId: targetId,
-          parentId: m.parentId,
-          role: m.role,
-          content: finalContent,
-          thinkingContent: thinkingText,
-          thinkingElapsedSecs: thinkingElapsed,
-          searchQueries: queries,
-          searchResults: results,
-          files: m.files,
-          status: finalStatus,
-          insertedAt: m.insertedAt,
-          feedback: m.feedback,
-          accumulatedTokenUsage: snapshot.accumulatedTokenUsage
-        };
-      }
-      return m;
-    });
+    if (snapshot.responseMessageId > 0 && snapshot.responseMessageId !== target.messageId) {
+      target.messageId = targetId;
+      this.streamingMessageId = targetId;
+      this.branchSelection.set(parentKey(target.parentId), targetId);
+      this.syncBranchInfosFor(this.displayMessages);
+    }
 
-    if (updated) {
-      this.rebuildDisplayMessages();
-      if (!this.userScrolledUp) {
-        this.scrollToBottomSoon();
+    let nextStageText = '';
+    if (!isFinal && thinkingText.length === 0 && finalContent.length === 0) {
+      if (hasSearch && results.length === 0) {
+        nextStageText = '正在联网搜索...';
+      } else if (hasThink) {
+        nextStageText = '正在深度思考...';
+      } else {
+        nextStageText = target.stageText.length > 0 ? target.stageText : '正在思考与组织回复...';
       }
+    }
+
+    if (target.hasSearch !== hasSearch) {
+      target.hasSearch = hasSearch;
+    }
+    if (target.stageText !== nextStageText) {
+      target.stageText = nextStageText;
+    }
+    if (target.content !== finalContent) {
+      target.content = finalContent;
+    }
+    if (target.thinkingContent !== thinkingText) {
+      target.thinkingContent = thinkingText;
+    }
+    if (target.thinkingElapsedSecs !== thinkingElapsed) {
+      target.thinkingElapsedSecs = thinkingElapsed;
+    }
+    if (!areStringArraysEqual(target.searchQueries, queries)) {
+      target.searchQueries = queries;
+    }
+    if (!areSearchResultsEqual(target.searchResults, results)) {
+      target.searchResults = results;
+    }
+    if (target.status !== finalStatus) {
+      target.status = finalStatus;
+    }
+    if (target.accumulatedTokenUsage !== snapshot.accumulatedTokenUsage) {
+      target.accumulatedTokenUsage = snapshot.accumulatedTokenUsage;
+    }
+    if (isFinal && target.isActiveStream) {
+      target.isActiveStream = false;
+    }
+
+    if (isFinal && !this.userScrolledUp) {
+      this.scrollToBottomSoon(30);
     }
   }
 
   private markAssistantError(assistantId: number, _errMsg: string): void {
-    this.allMessages = this.allMessages.map((m: ChatMessage): ChatMessage => {
-      if (m.messageId === assistantId && m.status === 'WIP') {
-        return {
-          messageId: m.messageId,
-          parentId: m.parentId,
-          role: m.role,
-          content: m.content,
-          thinkingContent: m.thinkingContent,
-          thinkingElapsedSecs: m.thinkingElapsedSecs,
-          searchQueries: m.searchQueries,
-          searchResults: m.searchResults,
-          files: m.files,
-          status: m.content.length > 0 ? 'INCOMPLETE' : 'ERROR',
-          insertedAt: m.insertedAt,
-          feedback: m.feedback,
-          accumulatedTokenUsage: m.accumulatedTokenUsage
-        };
+    const target = this.resolveStreamingTarget(assistantId);
+    if (target !== null) {
+      if (target.status === 'WIP') {
+        target.status = target.content.length > 0 ? 'INCOMPLETE' : 'ERROR';
       }
-      return m;
-    });
-    this.rebuildDisplayMessages();
+      target.stageText = '';
+      target.isActiveStream = false;
+    }
   }
 
   private stopActiveStream(): void {
+    this.streamRequestSeq++;
     this.clearThrottleTimer();
+    this.pendingSnapshot = null;
     if (this.activeStreamHandle !== null) {
       this.activeStreamHandle.abort();
       this.activeStreamHandle = null;
@@ -850,27 +1048,15 @@ struct Index {
     const msgId = this.streamingMessageId;
     this.isStreaming = false;
 
-    this.allMessages = this.allMessages.map((m: ChatMessage): ChatMessage => {
-      if (m.messageId === msgId && m.status === 'WIP') {
-        return {
-          messageId: m.messageId,
-          parentId: m.parentId,
-          role: m.role,
-          content: m.content,
-          thinkingContent: m.thinkingContent,
-          thinkingElapsedSecs: m.thinkingElapsedSecs,
-          searchQueries: m.searchQueries,
-          searchResults: m.searchResults,
-          files: m.files,
-          status: 'INCOMPLETE',
-          insertedAt: m.insertedAt,
-          feedback: m.feedback,
-          accumulatedTokenUsage: m.accumulatedTokenUsage
-        };
+    const target = this.resolveStreamingTarget(msgId);
+    if (target !== null) {
+      if (target.status === 'WIP') {
+        target.status = 'INCOMPLETE';
       }
-      return m;
-    });
-    this.rebuildDisplayMessages();
+      target.stageText = '';
+      target.isActiveStream = false;
+    }
+    this.activeStreamingMessage = null;
 
     if (sessionId.length > 0 && msgId > 0) {
       DeepSeekApi.getInstance().stopStream(sessionId, msgId);
@@ -881,27 +1067,7 @@ struct Index {
     if (this.currentSessionId.length === 0 || msg.messageId <= 0) {
       return;
     }
-    this.allMessages = this.allMessages.map((m: ChatMessage): ChatMessage => {
-      if (m.messageId === msg.messageId) {
-        return {
-          messageId: m.messageId,
-          parentId: m.parentId,
-          role: m.role,
-          content: m.content,
-          thinkingContent: m.thinkingContent,
-          thinkingElapsedSecs: m.thinkingElapsedSecs,
-          searchQueries: m.searchQueries,
-          searchResults: m.searchResults,
-          files: m.files,
-          status: m.status,
-          insertedAt: m.insertedAt,
-          feedback: nextFeedback,
-          accumulatedTokenUsage: m.accumulatedTokenUsage
-        };
-      }
-      return m;
-    });
-    this.rebuildDisplayMessages();
+    msg.feedback = nextFeedback;
 
     try {
       await DeepSeekApi.getInstance().submitFeedback(this.currentSessionId, msg.messageId, nextFeedback);
@@ -987,24 +1153,6 @@ struct Index {
     });
   }
 
-  private cloneMessageWithId(msg: ChatMessage, newId: number, newParentId: number | null): ChatMessage {
-    return {
-      messageId: newId,
-      parentId: newParentId,
-      role: msg.role,
-      content: msg.content,
-      thinkingContent: msg.thinkingContent,
-      thinkingElapsedSecs: msg.thinkingElapsedSecs,
-      searchQueries: msg.searchQueries,
-      searchResults: msg.searchResults,
-      files: msg.files,
-      status: msg.status,
-      insertedAt: msg.insertedAt,
-      feedback: msg.feedback,
-      accumulatedTokenUsage: msg.accumulatedTokenUsage
-    };
-  }
-
   private clearThrottleTimer(): void {
     if (this.throttleTimerId !== -1) {
       clearTimeout(this.throttleTimerId);
@@ -1012,14 +1160,28 @@ struct Index {
     }
   }
 
-  private scrollToBottomSoon(): void {
-    setTimeout(() => {
+  private clearScrollTimer(): void {
+    if (this.scrollTimerId !== -1) {
+      clearTimeout(this.scrollTimerId);
+      this.scrollTimerId = -1;
+    }
+  }
+
+  private scrollToBottomSoon(delayMs: number = 16): void {
+    if (this.scrollTimerId !== -1) {
+      return;
+    }
+    this.scrollTimerId = setTimeout(() => {
+      this.scrollTimerId = -1;
+      if (this.userScrolledUp) {
+        return;
+      }
       try {
         this.listScroller.scrollEdge(Edge.Bottom);
       } catch (err) {
         // 忽略。
       }
-    }, 30);
+    }, delayMs);
   }
 
   private getTimeGreeting(): string {
@@ -1081,39 +1243,6 @@ struct Index {
       }
       .padding({ left: 24, right: 24 })
       .alignItems(HorizontalAlign.Center)
-
-      if (this.loggedIn) {
-        Column({ space: 8 }) {
-          ForEach(STARTER_PROMPTS, (item: StarterPrompt) => {
-            Row({ space: 10 }) {
-              Text(item.title)
-                .fontSize(12)
-                .fontWeight(FontWeight.Bold)
-                .fontColor($r('app.color.accent_primary'))
-                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                .backgroundColor($r('app.color.bg_pill_active'))
-                .borderRadius(8)
-
-              Text(item.prompt)
-                .fontSize(13)
-                .fontColor($r('app.color.text_secondary'))
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-            .backgroundColor($r('app.color.bg_surface'))
-            .borderRadius(12)
-            .border({ width: 1, color: $r('app.color.border_color') })
-            .onClick(() => {
-              this.promptText = item.prompt;
-            })
-          }, (item: StarterPrompt) => item.title)
-        }
-        .width('100%')
-        .padding({ left: 18, right: 18 })
-      }
     }
     .layoutWeight(1)
     .width('100%')
@@ -1254,9 +1383,6 @@ struct Index {
               ListItem() {
                 MessageBubble({
                   message: msg,
-                  branchInfo: this.getBranchFor(msg),
-                  bodyFontSize: this.bodyFontSize,
-                  isActiveStream: this.isStreaming && msg.messageId === this.streamingMessageId,
                   onCopyNotice: (notice: string): void => {
                     this.showToast(notice);
                   },
@@ -1278,23 +1404,64 @@ struct Index {
                   },
                   onOpenSourceUrl: (url: string, title: string): void => {
                     this.openWebPage(url, title, false);
+                  },
+                  onStreamingHeightChange: (): void => {
+                    if (!this.userScrolledUp) {
+                      this.scrollToBottomSoon(16);
+                    }
                   }
                 })
               }
-            }, (msg: ChatMessage) =>
-              `${msg.messageId}_${msg.status}_${msg.feedback}_${msg.content.length}_${msg.thinkingContent.length}_${msg.searchResults.length}`
-            )
+            }, (msg: ChatMessage) => msg.renderKey)
           }
           .width('100%')
           .height('100%')
           .padding({ left: 14, right: 14, top: 14, bottom: 20 })
           .scrollBar(BarState.Auto)
-          .onScrollIndex((_start: number, end: number) => {
-            const lastIdx = this.displayMessages.length - 1;
-            if (lastIdx >= 0 && end >= lastIdx) {
-              this.userScrolledUp = false;
-            } else if (lastIdx >= 0 && end < lastIdx) {
+          .onWillScroll((scrollOffset: number, _scrollState: ScrollState, scrollSource: ScrollSource) => {
+            const fromUser =
+              scrollSource === ScrollSource.DRAG ||
+              scrollSource === ScrollSource.FLING ||
+              scrollSource === ScrollSource.OTHER_USER_INPUT ||
+              scrollSource === ScrollSource.SCROLL_BAR ||
+              scrollSource === ScrollSource.SCROLL_BAR_FLING;
+            this.lastScrollFromUser = fromUser;
+            if (fromUser && scrollOffset < -1) {
               this.userScrolledUp = true;
+              this.clearScrollTimer();
+            }
+          })
+          .onDidScroll((scrollOffset: number, _scrollState: ScrollState) => {
+            if (this.lastScrollFromUser) {
+              try {
+                if (this.listScroller.isAtEnd()) {
+                  this.userScrolledUp = false;
+                } else if (scrollOffset < -0.5) {
+                  this.userScrolledUp = true;
+                  this.clearScrollTimer();
+                }
+              } catch (err) {
+                // 忽略。
+              }
+            }
+          })
+          .onReachEnd(() => {
+            try {
+              if (this.listScroller.isAtEnd()) {
+                this.userScrolledUp = false;
+              }
+            } catch (err) {
+              // 忽略。
+            }
+          })
+          .onScrollStop(() => {
+            if (this.lastScrollFromUser) {
+              try {
+                this.userScrolledUp = !this.listScroller.isAtEnd();
+              } catch (err) {
+                // 忽略。
+              }
+              this.lastScrollFromUser = false;
             }
           })
 
@@ -1310,7 +1477,9 @@ struct Index {
               .margin({ bottom: 10 })
               .onClick(() => {
                 this.userScrolledUp = false;
-                this.scrollToBottomSoon();
+                this.lastScrollFromUser = false;
+                this.clearScrollTimer();
+                this.scrollToBottomSoon(16);
               })
           }
         }
@@ -1350,10 +1519,6 @@ struct Index {
     .layoutWeight(1)
     .height('100%')
     .backgroundColor($r('app.color.bg_page'))
-  }
-
-  private getBranchFor(msg: ChatMessage): BranchInfo {
-    return getBranchInfo(this.allMessages, msg);
   }
 
   build() {

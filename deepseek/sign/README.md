@@ -2,7 +2,7 @@
 
 本目录用于存放 HarmonyOS 发布签名材料，**不要提交到公开仓库**。
 
-当前应用：**AI 对话助手**，包名 **`com.nihaoa.aichat`**，版本 `1.0.0 / 1000000`。
+当前应用：**AI 对话助手**，包名 **`com.nihaoa.aichat`**，版本 `1.2.0 / 1002000`。
 
 ## 当前文件清单
 
@@ -37,7 +37,7 @@ sign/
 在工程根目录执行：
 
 ```bash
-python scripts/rebuild_and_sign.py
+python scripts/rebuild_and_sign.py --cores 4
 ```
 
 脚本会先执行 Release 构建，再使用本目录的材料签名，输出：

@@ -6,7 +6,8 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "@luvi/lv-markdown-in": "^3.4.7"
+    "@luvi/lv-markdown-in": "^3.4.7",
+    "libpow_solver.so": "file:./src/main/cpp/types/libpow_solver"
   },
   "devDependencies": {},
   "dynamicDependencies": {}

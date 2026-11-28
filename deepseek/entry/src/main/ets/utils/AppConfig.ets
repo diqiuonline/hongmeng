@@ -1,6 +1,6 @@
 export class AppConfig {
   static readonly APP_NAME: string = 'AI 对话助手';
-  static readonly APP_VERSION: string = '1.0.0';
+  static readonly APP_VERSION: string = '1.2.0';
   static readonly BASE_URL: string = 'https://chat.deepseek.com';
   static readonly SIGN_IN_URL: string = 'https://chat.deepseek.com/sign_in';
   static readonly CLIENT_PLATFORM: string = 'web';

@@ -1,4 +1,4 @@
-import { BranchInfo, ChatMessage, MessageFeedback, UploadedAttachment } from '../model/ChatModels';
+import { ChatMessage, MessageFeedback, UploadedAttachment } from '../model/ChatModels';
 import { copyTextToClipboard } from '../utils/ClipboardUtils';
 import { MarkdownView } from './MarkdownView';
 import { SearchResultBar } from './SearchResultSheet';
@@ -6,24 +6,8 @@ import { ThinkingCard } from './ThinkingCard';
 
 @Component
 export struct MessageBubble {
-  @Prop message: ChatMessage = {
-    messageId: 0,
-    parentId: null,
-    role: 'ASSISTANT',
-    content: '',
-    thinkingContent: '',
-    thinkingElapsedSecs: 0,
-    searchQueries: [],
-    searchResults: [],
-    files: [],
-    status: 'FINISHED',
-    insertedAt: 0,
-    feedback: 'none',
-    accumulatedTokenUsage: 0
-  };
-  @Prop branchInfo: BranchInfo = { currentIndex: 1, totalCount: 1, siblingIds: [] };
-  @Prop bodyFontSize: number = 15;
-  @Prop isActiveStream: boolean = false;
+  @ObjectLink message: ChatMessage;
+  @StorageProp('bodyFontSize') bodyFontSize: number = 15;
 
   onCopyNotice: (msg: string) => void = () => {};
   onEditUserMessage: (msg: ChatMessage) => void = () => {};
@@ -32,13 +16,16 @@ export struct MessageBubble {
   onShareMessage: (msg: ChatMessage) => void = () => {};
   onSwitchBranch: (parentId: number | null, targetMessageId: number) => void = () => {};
   onOpenSourceUrl: (url: string, title: string) => void = () => {};
+  onStreamingHeightChange: () => void = () => {};
+
+  private lastObservedHeight: number = 0;
 
   private switchRelative(delta: number): void {
-    const ids = this.branchInfo.siblingIds;
+    const ids = this.message.branchInfo.siblingIds;
     if (ids.length <= 1) {
       return;
     }
-    const nextPos = this.branchInfo.currentIndex - 1 + delta;
+    const nextPos = this.message.branchInfo.currentIndex - 1 + delta;
     if (nextPos >= 0 && nextPos < ids.length) {
       this.onSwitchBranch(this.message.parentId, ids[nextPos]);
     }
@@ -62,32 +49,34 @@ export struct MessageBubble {
 
   @Builder
   private BranchSwitcherBuilder() {
-    if (this.branchInfo.totalCount > 1) {
+    if (this.message.branchInfo.totalCount > 1) {
       Row({ space: 4 }) {
         Text('‹')
           .fontSize(15)
-          .fontColor(this.branchInfo.currentIndex > 1 ? $r('app.color.text_primary') : $r('app.color.text_muted'))
+          .fontColor(
+            this.message.branchInfo.currentIndex > 1 ? $r('app.color.text_primary') : $r('app.color.text_muted')
+          )
           .padding({ left: 6, right: 6, top: 2, bottom: 2 })
           .onClick(() => {
-            if (this.branchInfo.currentIndex > 1) {
+            if (this.message.branchInfo.currentIndex > 1) {
               this.switchRelative(-1);
             }
           })
 
-        Text(`${this.branchInfo.currentIndex}/${this.branchInfo.totalCount}`)
+        Text(`${this.message.branchInfo.currentIndex}/${this.message.branchInfo.totalCount}`)
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
 
         Text('›')
           .fontSize(15)
           .fontColor(
-            this.branchInfo.currentIndex < this.branchInfo.totalCount
+            this.message.branchInfo.currentIndex < this.message.branchInfo.totalCount
               ? $r('app.color.text_primary')
               : $r('app.color.text_muted')
           )
           .padding({ left: 6, right: 6, top: 2, bottom: 2 })
           .onClick(() => {
-            if (this.branchInfo.currentIndex < this.branchInfo.totalCount) {
+            if (this.message.branchInfo.currentIndex < this.message.branchInfo.totalCount) {
               this.switchRelative(1);
             }
           })
@@ -185,7 +174,7 @@ export struct MessageBubble {
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary'))
 
-          if (this.isActiveStream) {
+          if (this.message.isActiveStream) {
             LoadingProgress()
               .width(14)
               .height(14)
@@ -195,11 +184,11 @@ export struct MessageBubble {
         .width('100%')
         .alignItems(VerticalAlign.Center)
 
-        if (this.message.searchQueries.length > 0 || this.message.searchResults.length > 0) {
+        if (this.message.hasSearch || this.message.searchQueries.length > 0 || this.message.searchResults.length > 0) {
           SearchResultBar({
             queries: this.message.searchQueries,
             results: this.message.searchResults,
-            isSearching: this.isActiveStream && this.message.searchResults.length === 0 &&
+            isSearching: this.message.isActiveStream && this.message.searchResults.length === 0 &&
               this.message.content.length === 0,
             onOpenSource: (url: string, title: string): void => {
               this.onOpenSourceUrl(url, title);
@@ -208,11 +197,11 @@ export struct MessageBubble {
         }
 
         if (this.message.thinkingContent.length > 0 ||
-          (this.isActiveStream && this.message.content.length === 0 && this.message.thinkingElapsedSecs > 0)) {
+          (this.message.isActiveStream && this.message.content.length === 0 && this.message.thinkingElapsedSecs > 0)) {
           ThinkingCard({
             thinkingContent: this.message.thinkingContent,
             elapsedSecs: this.message.thinkingElapsedSecs,
-            isThinkingActive: this.isActiveStream && this.message.content.length === 0,
+            isThinkingActive: this.message.isActiveStream && this.message.content.length === 0,
             bodyFontSize: this.bodyFontSize
           })
         }
@@ -231,13 +220,17 @@ export struct MessageBubble {
               this.onCopyNotice(msg);
             }
           })
-        } else if (this.isActiveStream && this.message.thinkingContent.length === 0) {
+        } else if (
+          this.message.isActiveStream &&
+          this.message.thinkingContent.length === 0 &&
+          !(this.message.hasSearch && this.message.searchResults.length === 0)
+        ) {
           Row({ space: 6 }) {
             LoadingProgress()
               .width(16)
               .height(16)
               .color($r('app.color.accent_primary'))
-            Text('正在思考与组织回复...')
+            Text(this.message.stageText.length > 0 ? this.message.stageText : '正在思考与组织回复...')
               .fontSize(13)
               .fontColor($r('app.color.text_muted'))
           }
@@ -254,7 +247,7 @@ export struct MessageBubble {
             .fontColor($r('app.color.danger_color'))
         }
 
-        if (!this.isActiveStream) {
+        if (!this.message.isActiveStream) {
           Row({ space: 10 }) {
             this.BranchSwitcherBuilder();
 
@@ -314,6 +307,17 @@ export struct MessageBubble {
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
+      .onAreaChange((_oldArea, newArea) => {
+        const nextHeight = Number(newArea.height);
+        if (!isNaN(nextHeight)) {
+          if (this.message.isActiveStream && nextHeight > this.lastObservedHeight + 1) {
+            this.lastObservedHeight = nextHeight;
+            this.onStreamingHeightChange();
+          } else {
+            this.lastObservedHeight = nextHeight;
+          }
+        }
+      })
     }
   }
 }

@@ -62,7 +62,15 @@ export interface UploadedAttachment {
   errorMessage: string;
 }
 
-export interface ChatMessage {
+let nextMessageRenderKeySeq: number = 1;
+
+export interface BranchInfo {
+  currentIndex: number;
+  totalCount: number;
+  siblingIds: number[];
+}
+
+export interface ChatMessageInit {
   messageId: number;
   parentId: number | null;
   role: MessageRole;
@@ -76,12 +84,53 @@ export interface ChatMessage {
   insertedAt: number;
   feedback: MessageFeedback;
   accumulatedTokenUsage: number;
+  isActiveStream?: boolean;
+  branchInfo?: BranchInfo;
+  stageText?: string;
+  hasSearch?: boolean;
 }
 
-export interface BranchInfo {
-  currentIndex: number;
-  totalCount: number;
-  siblingIds: number[];
+@Observed
+export class ChatMessage {
+  renderKey: string;
+  messageId: number;
+  parentId: number | null;
+  role: MessageRole;
+  content: string;
+  thinkingContent: string;
+  thinkingElapsedSecs: number;
+  searchQueries: string[];
+  searchResults: SearchSource[];
+  files: UploadedAttachment[];
+  status: MessageStatus;
+  insertedAt: number;
+  feedback: MessageFeedback;
+  accumulatedTokenUsage: number;
+  isActiveStream: boolean;
+  branchInfo: BranchInfo;
+  stageText: string;
+  hasSearch: boolean;
+
+  constructor(init: ChatMessageInit) {
+    this.renderKey = `msg_${nextMessageRenderKeySeq++}`;
+    this.messageId = init.messageId;
+    this.parentId = init.parentId;
+    this.role = init.role;
+    this.content = init.content;
+    this.thinkingContent = init.thinkingContent;
+    this.thinkingElapsedSecs = init.thinkingElapsedSecs;
+    this.searchQueries = init.searchQueries;
+    this.searchResults = init.searchResults;
+    this.files = init.files;
+    this.status = init.status;
+    this.insertedAt = init.insertedAt;
+    this.feedback = init.feedback;
+    this.accumulatedTokenUsage = init.accumulatedTokenUsage;
+    this.isActiveStream = init.isActiveStream ?? false;
+    this.branchInfo = init.branchInfo ?? { currentIndex: 1, totalCount: 1, siblingIds: [] };
+    this.stageText = init.stageText ?? '';
+    this.hasSearch = init.hasSearch ?? false;
+  }
 }
 
 export interface PowChallenge {
