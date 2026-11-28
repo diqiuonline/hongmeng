@@ -1,5 +1,4 @@
-import { LengthMetrics, promptAction, router } from '@kit.ArkUI';
-import { common } from '@kit.AbilityKit';
+import { LengthMetrics } from '@kit.ArkUI';
 import {
   ApiError,
   ErrorKind,
@@ -13,9 +12,17 @@ import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
 import { ForumOrderPrefs } from '../store/ForumOrderPrefs';
 import { StateView } from '../components/StateView';
+import {
+  AppNavigator,
+  ForumRouteParams,
+  Routes,
+  ThreadRouteParams,
+  UserProfileRouteParams
+} from '../utils/AppRouter';
 import { safeAvatarInitial, splitHighlightText } from '../utils/AvatarUtils';
 import { formatTime } from '../utils/TimeUtils';
 import { getTheme, KEY_IS_DARK } from '../utils/Theme';
+import { getHostContext, showToast } from '../utils/UiUtils';
 
 class SearchTabType {
   static readonly THREAD: string = 'thread';
@@ -69,9 +76,8 @@ struct SearchAvatar {
 /**
  * 综合搜索页：支持搜索帖子（含排序与游标加载更多）、版块与用户，并保留最近搜索历史。
  */
-@Entry
 @Component
-struct SearchPage {
+export struct SearchPage {
   @State keyword: string = '';
   @State submittedKeyword: string = '';
   @State searchType: string = SearchTabType.THREAD;
@@ -89,31 +95,19 @@ struct SearchPage {
   @State history: string[] = [];
 
   @StorageProp(KEY_IS_DARK) isDark: boolean = false;
+  private bootstrapped: boolean = false;
 
   aboutToAppear(): void {
     this.bootstrap();
   }
 
-  onPageShow(): void {
-    if (this.needLogin && CookieStore.getInstance().hasCookie() && this.submittedKeyword.length > 0) {
-      this.executeSearch(this.submittedKeyword);
-    }
-  }
-
   private async bootstrap(): Promise<void> {
-    const ctx = getContext(this) as common.Context;
+    const ctx = getHostContext(this.getUIContext());
     await CookieStore.getInstance().ensureInit(ctx);
     await DisplayPrefs.getInstance().ensureInit(ctx);
     await ForumOrderPrefs.getInstance().ensureInit(ctx);
     this.history = ForumOrderPrefs.getInstance().getSearchHistory();
-  }
-
-  private showToast(message: string): void {
-    try {
-      promptAction.showToast({ message: message });
-    } catch (error) {
-      // 忽略页面退出等场景下的弹窗异常。
-    }
+    this.bootstrapped = true;
   }
 
   private switchSearchType(nextType: string): void {
@@ -139,7 +133,7 @@ struct SearchPage {
   private submitKeyword(): void {
     const trimmed = this.keyword.trim();
     if (trimmed.length === 0) {
-      this.showToast('请输入搜索关键词');
+      showToast(this.getUIContext(), '请输入搜索关键词');
       return;
     }
     this.executeSearch(trimmed);
@@ -214,7 +208,7 @@ struct SearchPage {
       this.hasMore = res.hasMore && res.searchAfter.length > 0;
     } catch (error) {
       const message = error instanceof ApiError ? error.message : '加载更多失败，请稍后重试。';
-      this.showToast(message);
+      showToast(this.getUIContext(), message);
     } finally {
       this.loadingMore = false;
     }
@@ -226,44 +220,34 @@ struct SearchPage {
   }
 
   private goLogin(): void {
-    router.pushUrl({ url: 'pages/LoginPage' }).catch(() => {
-    });
+    AppNavigator.getInstance().push(Routes.LOGIN);
   }
 
   private openThread(tid: number, title: string): void {
-    router.pushUrl({
-      url: 'pages/ThreadPage',
-      params: {
-        tid: tid,
-        title: title
-      }
-    }).catch(() => {
-    });
+    const params: ThreadRouteParams = {
+      tid: tid,
+      title: title
+    };
+    AppNavigator.getInstance().push(Routes.THREAD, params);
   }
 
   private openForum(fid: number, name: string): void {
-    router.pushUrl({
-      url: 'pages/ForumPage',
-      params: {
-        fid: fid,
-        name: name
-      }
-    }).catch(() => {
-    });
+    const params: ForumRouteParams = {
+      fid: fid,
+      name: name
+    };
+    AppNavigator.getInstance().push(Routes.FORUM, params);
   }
 
   private openUserProfile(uid: number, name: string): void {
     if (uid <= 0) {
       return;
     }
-    router.pushUrl({
-      url: 'pages/UserProfilePage',
-      params: {
-        uid: uid,
-        name: name
-      }
-    }).catch(() => {
-    });
+    const params: UserProfileRouteParams = {
+      uid: uid,
+      name: name
+    };
+    AppNavigator.getInstance().push(Routes.USER_PROFILE, params);
   }
 
   private isResultEmpty(): boolean {
@@ -298,16 +282,17 @@ struct SearchPage {
   }
 
   build() {
-    Column() {
-      Row({ space: 8 }) {
-        Button('返回')
-          .fontSize(12)
-          .height(34)
-          .backgroundColor(getTheme(this.isDark).accentBg)
-          .fontColor(getTheme(this.isDark).accent)
-          .onClick(() => {
-            router.back();
-          })
+    NavDestination() {
+      Column() {
+        Row({ space: 8 }) {
+          Button('返回')
+            .fontSize(12)
+            .height(34)
+            .backgroundColor(getTheme(this.isDark).accentBg)
+            .fontColor(getTheme(this.isDark).accent)
+            .onClick(() => {
+              AppNavigator.getInstance().pop();
+            })
 
         TextInput({
           placeholder: '搜索帖子、版块或用户',
@@ -662,5 +647,15 @@ struct SearchPage {
     .width('100%')
     .height('100%')
     .backgroundColor(getTheme(this.isDark).pageBg)
+    }
+    .hideTitleBar(true)
+    .onShown(() => {
+      if (!this.bootstrapped) {
+        return;
+      }
+      if (this.needLogin && CookieStore.getInstance().hasCookie() && this.submittedKeyword.length > 0) {
+        this.executeSearch(this.submittedKeyword);
+      }
+    })
   }
 }

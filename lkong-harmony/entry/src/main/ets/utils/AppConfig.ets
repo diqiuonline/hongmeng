@@ -4,10 +4,15 @@ export const KEY_THREAD_REFRESH_PID: string = 'lkong_thread_refresh_pid';
 export const KEY_THREAD_REFRESH_LOU: string = 'lkong_thread_refresh_lou';
 export const KEY_FORUM_REFRESH_FID: string = 'lkong_forum_refresh_fid';
 export const KEY_NOTICE_COUNT_DIRTY: string = 'lkong_notice_count_dirty';
+export const KEY_PM_LIST_DIRTY: string = 'lkong_pm_list_dirty';
+export const KEY_USER_FOLLOW_SEQ: string = 'lkong_user_follow_seq';
+export const KEY_AUTO_PUNCH_ENABLED: string = 'lkong_auto_punch_enabled';
+export const KEY_AUTO_PUNCH_LAST_NOTE: string = 'lkong_auto_punch_last_note';
+export const KEY_APP_FOREGROUND_SEQ: string = 'lkong_app_foreground_seq';
 
 export class AppConfig {
   static readonly APP_NAME: string = '龙空客户端';
-  static readonly APP_VERSION: string = '1.3.0';
+  static readonly APP_VERSION: string = '1.5.0';
   static readonly API_URL: string = 'https://api.lkong.com/api';
   static readonly UPLOAD_URL: string = 'https://images.lkong.com/upload';
   static readonly DISCLAIMER: string =

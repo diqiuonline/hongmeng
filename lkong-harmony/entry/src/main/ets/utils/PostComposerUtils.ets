@@ -1,5 +1,6 @@
 import { NoticeCount, UploadedImage } from '../model/Models';
-import { pickBoolean, pickNumber, pickString } from '../network/JsonUtils';
+import { pickArray, pickBoolean, pickNumber, pickObject, pickString } from '../network/JsonUtils';
+import { parsePostBlocks } from './ContentUtils';
 
 const EMOTION_BASE_URL = 'https://image.lkong.com/bq/em';
 const UPLOADED_IMAGE_BASE_URL = 'https://images.lkong.com/images/';
@@ -208,8 +209,171 @@ export function getVisibleUnreadTotal(count: NoticeCount | null): number {
     Math.max(0, count.noticeCount) +
     Math.max(0, count.atmeCount) +
     Math.max(0, count.rateCount) +
-    Math.max(0, count.fansCount)
+    Math.max(0, count.fansCount) +
+    Math.max(0, count.pmCount)
   );
+}
+
+export interface EditablePostContent {
+  text: string;
+  images: UploadedImage[];
+}
+
+function extractImageKeyFromUrl(rawUrl: string): string {
+  const match = /\/images\/([^./?#]+)(?:\.[a-z0-9]+)?(?:[?#]|$)/i.exec(rawUrl);
+  return match !== null ? match[1] : '';
+}
+
+function extractEmotionIdFromUrl(rawUrl: string): number {
+  const match = /\/bq\/em(\d+)\.gif/i.exec(rawUrl);
+  if (match === null) {
+    return 0;
+  }
+  const id = Number(match[1]);
+  return isNaN(id) ? 0 : id;
+}
+
+function extractEditableLine(node: Object): string {
+  if (node === null || node === undefined) {
+    return '';
+  }
+  if (typeof node === 'string') {
+    return node;
+  }
+  if (Array.isArray(node)) {
+    const parts: string[] = [];
+    for (const item of node as Object[]) {
+      parts.push(extractEditableLine(item));
+    }
+    return parts.join('');
+  }
+  const rec = node as Record<string, Object>;
+  const type = pickString(rec, ['type']);
+  const attrs = pickObject(rec, ['attrs']);
+  if (type === 'emotion' || type === 'emoji') {
+    let eid = pickNumber(rec, ['id']);
+    if (eid <= 0) {
+      eid = pickNumber(attrs, ['id']);
+    }
+    if (eid > 0) {
+      return formatEmotionToken(eid);
+    }
+    const url = pickString(rec, ['url', 'src']);
+    const urlId = extractEmotionIdFromUrl(url);
+    return urlId > 0 ? formatEmotionToken(urlId) : '[表情]';
+  }
+  if (type === 'hardBreak' || type === 'hard_break') {
+    return '\n';
+  }
+  const children = pickArray(rec, ['children', 'content']);
+  if (children.length > 0) {
+    const parts: string[] = [];
+    for (const child of children) {
+      parts.push(extractEditableLine(child));
+    }
+    return parts.join('');
+  }
+  return pickString(rec, ['text']);
+}
+
+/**
+ * 将已发布帖子的 Slate JSON（或旧帖 HTML）还原为 ComposePage 可编辑的纯文本 + [em{id}] + 图片附件列表。
+ */
+export function parseEditablePostContent(raw: string): EditablePostContent {
+  const images: UploadedImage[] = [];
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return { text: '', images: images };
+  }
+
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      let parsed = JSON.parse(trimmed) as Object;
+      if (typeof parsed === 'string') {
+        const inner = (parsed as string).trim();
+        if (inner.startsWith('[') || inner.startsWith('{')) {
+          parsed = JSON.parse(inner) as Object;
+        }
+      }
+      const rootNodes: Object[] = Array.isArray(parsed)
+        ? (parsed as Object[])
+        : pickArray(parsed as Record<string, Object>, ['content', 'children']);
+      if (rootNodes.length > 0) {
+        const lines: string[] = [];
+        for (const item of rootNodes) {
+          if (item === null || item === undefined || typeof item !== 'object') {
+            continue;
+          }
+          const rec = item as Record<string, Object>;
+          const type = pickString(rec, ['type']);
+          const attrs = pickObject(rec, ['attrs']);
+          if (type === 'image') {
+            let key = pickString(rec, ['imageKey']);
+            if (key.length === 0) {
+              key = pickString(attrs, ['imageKey']);
+            }
+            if (key.length === 0) {
+              const url = pickString(rec, ['url', 'src']);
+              key = extractImageKeyFromUrl(url.length > 0 ? url : pickString(attrs, ['url', 'src']));
+            }
+            if (key.length > 0) {
+              let width = pickNumber(rec, ['width']);
+              if (width <= 0) {
+                width = pickNumber(attrs, ['width']);
+              }
+              let height = pickNumber(rec, ['height']);
+              if (height <= 0) {
+                height = pickNumber(attrs, ['height']);
+              }
+              images.push({
+                key: key,
+                width: width,
+                height: height
+              });
+            }
+            continue;
+          }
+          lines.push(extractEditableLine(item));
+        }
+        return {
+          text: lines.join('\n'),
+          images: images
+        };
+      }
+    } catch (error) {
+      // JSON 解析失败时回退到块解析。
+    }
+  }
+
+  const blocks = parsePostBlocks(raw);
+  const fallbackLines: string[] = [];
+  for (const blk of blocks) {
+    if (blk.kind === 'image') {
+      const key = extractImageKeyFromUrl(blk.imageUrl);
+      if (key.length > 0) {
+        images.push({
+          key: key,
+          width: blk.imageWidth,
+          height: blk.imageHeight
+        });
+      }
+      continue;
+    }
+    const lineParts: string[] = [];
+    for (const inline of blk.inlines) {
+      if (inline.kind === 'emotion') {
+        const eid = extractEmotionIdFromUrl(inline.url);
+        lineParts.push(eid > 0 ? formatEmotionToken(eid) : inline.text);
+      } else {
+        lineParts.push(inline.text);
+      }
+    }
+    fallbackLines.push(lineParts.join(''));
+  }
+  return {
+    text: fallbackLines.join('\n'),
+    images: images
+  };
 }
 
 /**

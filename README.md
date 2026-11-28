@@ -8,7 +8,7 @@
 
 | 目录 | 应用名称 | 包名（`bundleName`） | 当前版本 | 简介 | 文档 |
 |---|---|---|---|---|---|
-| `lkong-harmony/` | 龙空 HarmonyOS 客户端 | `com.nihaoa.lkong` | `1.3.0`（`1003000`） | 龙的天空论坛非官方原生客户端，基于官方 GraphQL API 实现版块排序、热帖、每日签到、综合搜索、云端收藏夹、富文本/动态表情/图片渲染、发帖/回帖/传图、龙币评分与站内通知中心 | [详细文档](./lkong-harmony/README.md) · [更新日志](./lkong-harmony/CHANGELOG.md) |
+| `lkong-harmony/` | 龙空 HarmonyOS 客户端 | `com.nihaoa.lkong` | `1.5.0`（`1005000`） | 龙的天空论坛非官方原生客户端，基于官方 GraphQL API 实现首页/版块/主页/通知全站多 Tab 左右滑动、版块排序与今日热门、每日自动签到、综合搜索、云端收藏夹、富文本/动态表情/图片渲染与保存、发帖/回帖/编辑/传图、龙币评分、个人帖子详情与站内私信 | [详细文档](./lkong-harmony/README.md) · [更新日志](./lkong-harmony/CHANGELOG.md) |
 | `deepseek/` | AI 对话助手 | `com.nihaoa.aichat` | `1.0.0`（`1000000`） | 原生第三方 AI 对话客户端，直连网页端协议，支持纯 ArkTS + `taskpool` 并行求解 `DeepSeekHashV1` PoW、流式 SSE JSON-Patch 解析、多分支消息树、Markdown / 代码块 / LaTeX 公式渲染及图片/文档 OCR 上传 | [详细文档](./deepseek/README.md) |
 
 ---
@@ -60,7 +60,7 @@ ohpm install
 `deepseek/` 的 ABI 架构过滤、发布签名与详细构建说明请参考 [deepseek/README.md](./deepseek/README.md)，低 CPU 限核构建方式请遵循 [AGENTS.md](./AGENTS.md)。
 
 > [!NOTE]
-> 各子项目 `*/sign/` 目录下的正式发布证书（`.cer` / `.p12`）与 Profile（`.p7b`）不会提交至仓库。如需在未开启开发者模式的真机上通过 AppGallery Connect 内测安装，请自行申请并配置签名材料。
+> 本仓库不包含任何签名材料。调试真机建议直接开启手机开发者模式配合 DevEco Studio 调试签名与 `hdc install` 安装（见各子项目 README）；若需免开发者模式安装，也可自行签名后通过 AppGallery Connect 内部测试（AppTest）通道安装。
 
 ---
 

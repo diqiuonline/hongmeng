@@ -17,12 +17,16 @@ import { AbilityConstant, Configuration, UIAbility, Want } from '@kit.AbilityKit
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { DisplayPrefs } from '../store/DisplayPrefs';
+import { PunchPrefs } from '../store/PunchPrefs';
+import { KEY_APP_FOREGROUND_SEQ } from '../utils/AppConfig';
 
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     DisplayPrefs.getInstance().ensureInit(this.context, this.context.config.colorMode).catch(() => {
+    });
+    PunchPrefs.getInstance().ensureInit(this.context).catch(() => {
     });
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
   }
@@ -55,6 +59,8 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     // Ability has brought to foreground
+    const prev = AppStorage.get<number>(KEY_APP_FOREGROUND_SEQ);
+    AppStorage.setOrCreate(KEY_APP_FOREGROUND_SEQ, (prev === undefined ? 0 : prev) + 1);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 

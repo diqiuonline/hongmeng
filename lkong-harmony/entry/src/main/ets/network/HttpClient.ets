@@ -3,11 +3,12 @@ import { ApiError, ErrorKind } from '../model/Models';
 import { CookieStore } from '../store/CookieStore';
 
 /**
- * 单例 HTTP 客户端，服务 GraphQL API 与官方图床上传。
+ * 单例 HTTP 客户端，服务 GraphQL API、官方图床上传与官方图片下载。
  *
  * 安全约束：
  * 1. postJson 只允许 https://api.lkong.com/api；uploadImage 只允许 https://images.lkong.com/upload；
- * 2. 请求之间至少间隔 800ms，避免短时间内高频访问；
+ *    downloadImage 只允许 https://images.lkong.com/ 与 https://image.lkong.com/ 且不携带 Cookie；
+ * 2. GraphQL 与上传请求严格串行并保持至少 800ms 间隔，避免短时间内高频访问；
  * 3. Cookie 只放在请求头里，不写入日志；
  * 4. 账号密码只用于登录请求的请求体，不写入本地存储。
  */
@@ -28,6 +29,7 @@ export interface HttpJsonResponse {
 export class HttpClient {
   private static instance: HttpClient = new HttpClient();
   private lastRequestAt: number = 0;
+  private queueTail: Promise<void> = Promise.resolve();
 
   static getInstance(): HttpClient {
     return HttpClient.instance;
@@ -143,6 +145,50 @@ export class HttpClient {
     }
   }
 
+  /**
+   * 仅用于保存图片到相册时下载官方静态图片，严格限制域名白名单且绝不携带 Cookie。
+   */
+  async downloadImage(url: string): Promise<ArrayBuffer> {
+    this.assertAllowedImageUrl(url);
+
+    const header: Record<string, string> = {
+      'User-Agent': USER_AGENT,
+      'Accept': 'image/*',
+      'Referer': 'https://www.lkong.com/'
+    };
+
+    const request = http.createHttp();
+    try {
+      const response = await request.request(url, {
+        method: http.RequestMethod.GET,
+        header: header,
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        connectTimeout: 15000,
+        readTimeout: 30000,
+        usingCache: true
+      });
+      const statusCode = response.responseCode as number;
+      if (statusCode !== 200) {
+        throw new ApiError(ErrorKind.HTTP, `图片下载失败（HTTP ${statusCode}）`, statusCode);
+      }
+      if (!(response.result instanceof ArrayBuffer)) {
+        throw new ApiError(ErrorKind.PARSE, '图片数据格式无效。');
+      }
+      const buf = response.result as ArrayBuffer;
+      if (buf.byteLength === 0) {
+        throw new ApiError(ErrorKind.PARSE, '图片数据为空。');
+      }
+      return buf;
+    } catch (error) {
+      if (error instanceof ApiError) {
+        throw error;
+      }
+      throw new ApiError(ErrorKind.NETWORK, '图片下载失败，请检查网络连接后重试。');
+    } finally {
+      request.destroy();
+    }
+  }
+
   private buildCommonHeader(): Record<string, string> {
     const header: Record<string, string> = {
       'User-Agent': USER_AGENT,
@@ -168,20 +214,39 @@ export class HttpClient {
     }
   }
 
+  private assertAllowedImageUrl(url: string): void {
+    const normalized = url.trim().toLowerCase();
+    if (!normalized.startsWith('https://images.lkong.com/') &&
+      !normalized.startsWith('https://image.lkong.com/')) {
+      throw new ApiError(ErrorKind.UNKNOWN, '图片地址不在官方域名白名单内。');
+    }
+  }
+
   /**
-   * 简单串行节流：不并发、不批量抓取。
+   * 严格串行排队节流：通过 Promise 链锁确保并发调用也保持至少 800ms 间隔。
    */
   private async waitForSlot(): Promise<void> {
-    const now = Date.now();
-    const wait = MIN_INTERVAL_MS - (now - this.lastRequestAt);
-    if (wait > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(() => {
-          resolve();
-        }, wait);
-      });
+    const previous = this.queueTail;
+    let release: () => void = () => {
+    };
+    this.queueTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      const now = Date.now();
+      const wait = MIN_INTERVAL_MS - (now - this.lastRequestAt);
+      if (wait > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(() => {
+            resolve();
+          }, wait);
+        });
+      }
+      this.lastRequestAt = Date.now();
+    } finally {
+      release();
     }
-    this.lastRequestAt = Date.now();
   }
 }
 

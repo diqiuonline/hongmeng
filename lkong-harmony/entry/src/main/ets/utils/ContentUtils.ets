@@ -1,4 +1,4 @@
-import { BlockKind, InlineKind, PostBlock, PostInline } from '../model/Models';
+import { BlockKind, InlineKind, PostBlock, PostInline, PostItem, ThreadImageItem } from '../model/Models';
 import {
   asRecord,
   pickArray,
@@ -361,6 +361,39 @@ export function parsePostBlocks(raw: string): PostBlock[] {
   }
 
   return parseHtmlToBlocks(raw);
+}
+
+export function extractImagesFromContent(
+  contentHtml: string,
+  floorLabel: string,
+  authorName: string,
+  pid: string = ''
+): ThreadImageItem[] {
+  const images: ThreadImageItem[] = [];
+  const blocks = parsePostBlocks(contentHtml);
+  for (const blk of blocks) {
+    if (blk.kind === BlockKind.IMAGE && blk.imageUrl.length > 0) {
+      images.push({
+        url: blk.imageUrl,
+        pid: pid,
+        floor: floorLabel,
+        authorName: authorName
+      });
+    }
+  }
+  return images;
+}
+
+export function extractImagesFromPosts(posts: PostItem[]): ThreadImageItem[] {
+  const images: ThreadImageItem[] = [];
+  for (const post of posts) {
+    const floorLabel = post.floor.length > 0 ? `${post.floor} 楼` : '楼主';
+    const postImages = extractImagesFromContent(post.contentHtml, floorLabel, post.authorName, post.pid);
+    for (const img of postImages) {
+      images.push(img);
+    }
+  }
+  return images;
 }
 
 function createTextInline(text: string, style: InlineStyle): PostInline {

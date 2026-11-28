@@ -261,6 +261,26 @@ export interface UserProfilePageData {
   page: number;
 }
 
+export interface UserPostItem {
+  pid: string;
+  tid: number;
+  title: string;
+  forumName: string;
+  fid: number;
+  authorId: number;
+  authorName: string;
+  dateline: string;
+  contentHtml: string;
+  typeName: string;
+  quotePid: string;
+  quoteAuthorId: number;
+  quoteAuthorName: string;
+  quoteContentHtml: string;
+  bookBid: number;
+  bookTitle: string;
+  bookScore: number;
+}
+
 export interface FavoriteGroup {
   id: number;
   title: string;
@@ -312,8 +332,53 @@ export interface ThreadPageData {
 export interface LoginResult {
   uid: number;
   name: string;
-  twoWay: boolean;
+  twoWay: string;
   serverTime: string;
+}
+
+export interface ThreadImageItem {
+  url: string;
+  pid: string;
+  floor: string;
+  authorName: string;
+}
+
+export interface EditablePostData {
+  tid: number;
+  pid: string;
+  title: string;
+  firstPid: string;
+  content: string;
+  authorId: number;
+  isLocked: boolean;
+}
+
+export interface PmConversationItem {
+  uid: number;
+  name: string;
+  avatarUrl: string;
+  lastTime: string;
+  newCount: number;
+  content: string;
+}
+
+export interface PmConversationListResult {
+  items: PmConversationItem[];
+  hasMore: boolean;
+  nextDate: string;
+}
+
+export interface PmMessageItem {
+  id: string;
+  uid: number;
+  content: string;
+  dateline: string;
+}
+
+export interface PmMessageListResult {
+  items: PmMessageItem[];
+  hasMore: boolean;
+  nextDate: string;
 }
 
 export interface PunchInfo {

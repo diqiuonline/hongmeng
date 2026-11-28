@@ -2,6 +2,7 @@ import {
   AtMeItem,
   AtMeListResult,
   CurrentUser,
+  EditablePostData,
   FanNoticeItem,
   FanNoticeListResult,
   FavoriteEntry,
@@ -16,6 +17,10 @@ import {
   NoticeItem,
   NoticeListResult,
   NoticeReplyUser,
+  PmConversationItem,
+  PmConversationListResult,
+  PmMessageItem,
+  PmMessageListResult,
   PostItem,
   PostQuote,
   PostRateItem,
@@ -29,6 +34,7 @@ import {
   ThreadDetail,
   ThreadPageData,
   ThreadSummary,
+  UserPostItem,
   UserProfile,
   UserProfilePageData
 } from '../model/Models';
@@ -48,8 +54,20 @@ export function parseLoginResult(data: Object): LoginResult {
   const result: LoginResult = {
     uid: pickNumber(login, ['uid']),
     name: pickString(login, ['name']),
-    twoWay: pickBoolean(login, ['twoWay']),
+    twoWay: pickString(login, ['twoWay']),
     serverTime: pickString(login, ['serverTime'])
+  };
+  return result;
+}
+
+export function parseTwoWayLoginResult(data: Object): LoginResult {
+  const root = asRecord(data);
+  const login = pickObject(root, ['twoWaylogin']);
+  const result: LoginResult = {
+    uid: pickNumber(login, ['uid']),
+    name: pickString(login, ['name']),
+    twoWay: '',
+    serverTime: ''
   };
   return result;
 }
@@ -464,6 +482,68 @@ export function parseUserThreads(data: Object): ThreadSummary[] {
   return parseThreadArray(rawThreads);
 }
 
+export function parseUserPosts(data: Object): UserPostItem[] {
+  const root = asRecord(data);
+  const rawItems = pickArray(root, ['content']);
+  const items: UserPostItem[] = [];
+
+  for (const rawItem of rawItems) {
+    if (rawItem === null || rawItem === undefined || typeof rawItem !== 'object') {
+      continue;
+    }
+    const record = asRecord(rawItem);
+    const pid = pickString(record, ['pid']);
+    const contentHtml = pickString(record, ['content']);
+    const authorObj = pickObject(record, ['author']);
+    const threadObj = pickObject(record, ['thread']);
+    const quoteObj = pickObject(record, ['quote']);
+    const quoteAuthor = pickObject(quoteObj, ['author']);
+    const bookObj = pickObject(record, ['book']);
+    const tid = pickNumber(threadObj, ['tid']);
+    if (pid.length === 0 && tid <= 0 && contentHtml.length === 0) {
+      continue;
+    }
+
+    const bookTitle = pickString(bookObj, ['title']);
+    let title = pickString(threadObj, ['title']);
+    if (title.length === 0 && bookTitle.length > 0) {
+      title = `书评：《${bookTitle}》`;
+    }
+    if (title.length === 0 && tid > 0) {
+      title = `帖子 #${tid}`;
+    }
+    if (title.length === 0) {
+      title = '用户帖子';
+    }
+
+    let authorId = pickNumber(authorObj, ['uid']);
+    if (authorId <= 0) {
+      authorId = pickNumber(record, ['authorid']);
+    }
+
+    items.push({
+      pid: pid,
+      tid: tid,
+      title: title,
+      forumName: pickString(threadObj, ['forumName']),
+      fid: pickNumber(threadObj, ['fid']),
+      authorId: authorId,
+      authorName: pickString(authorObj, ['name']),
+      dateline: pickString(record, ['dateline']),
+      contentHtml: contentHtml,
+      typeName: pickString(record, ['__typename']),
+      quotePid: pickString(quoteObj, ['pid']),
+      quoteAuthorId: pickNumber(quoteAuthor, ['uid']),
+      quoteAuthorName: pickString(quoteAuthor, ['name']),
+      quoteContentHtml: pickString(quoteObj, ['content']),
+      bookBid: pickNumber(bookObj, ['bid']),
+      bookTitle: bookTitle,
+      bookScore: pickNumber(record, ['score'])
+    });
+  }
+  return items;
+}
+
 function parseFavoriteGroupRecord(record: Record<string, Object>): FavoriteGroup {
   const group: FavoriteGroup = {
     id: pickNumber(record, ['id']),
@@ -869,4 +949,99 @@ export function parseFansNoticeList(data: Object): FanNoticeListResult {
     nextDate: pickString(box, ['nextDate'])
   };
   return result;
+}
+
+export function parseEditablePost(
+  data: Object,
+  fallbackTid: number,
+  fallbackPid: string
+): EditablePostData {
+  const root = asRecord(data);
+  const threadObj = pickObject(root, ['thread']);
+  const postObj = pickObject(root, ['post']);
+  const pid = pickString(postObj, ['pid']);
+  const result: EditablePostData = {
+    tid: fallbackTid,
+    pid: pid.length > 0 ? pid : fallbackPid,
+    title: pickString(threadObj, ['title']),
+    firstPid: pickString(threadObj, ['first']),
+    content: pickString(postObj, ['content']),
+    authorId: pickNumber(postObj, ['authorid']),
+    isLocked: pickBoolean(postObj, ['lock'])
+  };
+  return result;
+}
+
+export function parsePmConversationList(data: Object): PmConversationListResult {
+  const root = asRecord(data);
+  const box = pickObject(root, ['lastUsersMessages']);
+  const rawList = pickArray(box, ['data', 'messages']);
+  const items: PmConversationItem[] = [];
+
+  for (const rawItem of rawList) {
+    if (rawItem === null || rawItem === undefined || typeof rawItem !== 'object') {
+      continue;
+    }
+    const record = asRecord(rawItem);
+    const userObj = pickObject(record, ['user']);
+    const uid = pickNumber(userObj, ['uid']);
+    if (uid <= 0) {
+      continue;
+    }
+    items.push({
+      uid: uid,
+      name: pickString(userObj, ['name']),
+      avatarUrl: buildUserAvatarUrl(uid, pickString(userObj, ['avatar'])),
+      lastTime: pickString(record, ['lastTime']),
+      newCount: pickNumber(record, ['newCount']),
+      content: pickString(record, ['content'])
+    });
+  }
+
+  const result: PmConversationListResult = {
+    items: items,
+    hasMore: pickBoolean(box, ['hasMore']),
+    nextDate: pickString(box, ['nextDate'])
+  };
+  return result;
+}
+
+function parsePmMessageRecord(record: Record<string, Object>): PmMessageItem {
+  const item: PmMessageItem = {
+    id: pickString(record, ['id']),
+    uid: pickNumber(record, ['uid']),
+    content: pickString(record, ['content']),
+    dateline: pickString(record, ['dateline'])
+  };
+  return item;
+}
+
+export function parsePmMessageList(data: Object): PmMessageListResult {
+  const root = asRecord(data);
+  const box = pickObject(root, ['userMessages']);
+  const rawList = pickArray(box, ['data', 'messages']);
+  const items: PmMessageItem[] = [];
+
+  for (const rawItem of rawList) {
+    if (rawItem === null || rawItem === undefined || typeof rawItem !== 'object') {
+      continue;
+    }
+    const parsed = parsePmMessageRecord(asRecord(rawItem));
+    if (parsed.id.length > 0 || parsed.content.length > 0) {
+      items.push(parsed);
+    }
+  }
+
+  const result: PmMessageListResult = {
+    items: items,
+    hasMore: pickBoolean(box, ['hasMore']),
+    nextDate: pickString(box, ['nextDate'])
+  };
+  return result;
+}
+
+export function parseSinglePmMessage(data: Object, fieldName: string): PmMessageItem {
+  const root = asRecord(data);
+  const record = pickObject(root, [fieldName]);
+  return parsePmMessageRecord(record);
 }

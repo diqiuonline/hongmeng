@@ -1,18 +1,34 @@
-import { promptAction, router } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { common } from '@kit.AbilityKit';
-import { ApiError, ErrorKind, FavoriteGroupOption, PostItem, PostRateItem } from '../model/Models';
+import {
+  ApiError,
+  ErrorKind,
+  FavoriteGroupOption,
+  PostItem,
+  PostRateItem,
+  ThreadImageItem
+} from '../model/Models';
 import { LkongApi } from '../network/LkongApi';
 import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
-import { StateView } from '../components/StateView';
+import { ImageViewerOverlay } from '../components/ImageViewerOverlay';
 import { PostCard } from '../components/PostCard';
+import { StateView } from '../components/StateView';
 import {
   KEY_THREAD_REFRESH_LOU,
   KEY_THREAD_REFRESH_PID,
   KEY_THREAD_REFRESH_SEQ,
   KEY_THREAD_REFRESH_TID
 } from '../utils/AppConfig';
+import {
+  AppNavigator,
+  ComposeRouteParams,
+  ForumRouteParams,
+  Routes,
+  ThreadRouteParams,
+  UserProfileRouteParams
+} from '../utils/AppRouter';
+import { extractImagesFromPosts } from '../utils/ContentUtils';
+import { LkongLinkKind, parseLkongUrl } from '../utils/LkongLinkUtils';
 import { formatTime } from '../utils/TimeUtils';
 import {
   FontSizePreset,
@@ -21,6 +37,7 @@ import {
   KEY_FONT_SIZE,
   KEY_IS_DARK
 } from '../utils/Theme';
+import { getHostContext, showToast } from '../utils/UiUtils';
 
 const POSTS_PER_PAGE: number = 20;
 const RATE_PRESETS: number[] = [1, 5, 10, 50, 100];
@@ -31,18 +48,12 @@ const FONT_PRESETS: number[] = [
   FontSizePreset.XLARGE
 ];
 
-interface ThreadParams {
-  tid: number;
-  title: string;
-  pid?: string;
-}
-
 /**
- * 帖子详情页：原生列表展示楼层，支持只看作者、快速跳页、字号快捷调节、引用楼层、云端收藏夹与图片预览。
+ * 帖子详情页：原生列表展示楼层，支持多图滑动缩放看图与保存相册、编辑自己楼层、龙空内链直达、
+ * 只看作者、快速跳页、字号快捷调节、引用楼层、评分、云端收藏夹、下拉刷新与回顶。
  */
-@Entry
 @Component
-struct ThreadPage {
+export struct ThreadPage {
   @State tid: number = 0;
   @State fallbackTitle: string = '';
   @State apiTitle: string = '';
@@ -59,6 +70,7 @@ struct ThreadPage {
   @State page: number = 1;
   @State posts: PostItem[] = [];
   @State loading: boolean = true;
+  @State refreshing: boolean = false;
   @State errorMessage: string = '';
   @State needLogin: boolean = false;
   @State hasMore: boolean = true;
@@ -67,8 +79,14 @@ struct ThreadPage {
   @State showFontBar: boolean = false;
   @State showJumpModal: boolean = false;
   @State jumpInput: string = '';
-  @State previewImageUrl: string = '';
   @State activeLinkUrl: string = '';
+  @State currentUserId: number = 0;
+  @State showScrollTop: boolean = false;
+
+  // 多图全屏看图状态
+  @State showImageViewer: boolean = false;
+  @State previewImages: ThreadImageItem[] = [];
+  @State previewIndex: number = 0;
 
   // 楼层评分弹窗状态
   @State showRateModal: boolean = false;
@@ -97,89 +115,38 @@ struct ThreadPage {
   @StorageProp(KEY_FONT_SIZE) bodyFontSize: number = FontSizePreset.STANDARD;
   private listScroller: Scroller = new Scroller();
   private lastRefreshSeq: number = 0;
-
-  onBackPress(): boolean {
-    if (this.previewImageUrl.length > 0) {
-      this.previewImageUrl = '';
-      return true;
-    }
-    if (this.activeLinkUrl.length > 0) {
-      this.activeLinkUrl = '';
-      return true;
-    }
-    if (this.showRateModal) {
-      this.showRateModal = false;
-      return true;
-    }
-    if (this.showFavoriteModal) {
-      this.showFavoriteModal = false;
-      return true;
-    }
-    if (this.showJumpModal) {
-      this.showJumpModal = false;
-      return true;
-    }
-    if (this.showFontBar) {
-      this.showFontBar = false;
-      return true;
-    }
-    return false;
-  }
-
-  aboutToAppear(): void {
-    const raw = router.getParams();
-    if (raw !== undefined && raw !== null) {
-      const params = raw as ThreadParams;
-      this.tid = params.tid === undefined ? 0 : params.tid;
-      this.fallbackTitle = params.title === undefined ? '' : params.title;
-      const paramPid = params.pid === undefined ? '' : params.pid;
-      this.pendingScrollPid = paramPid;
-      this.highlightPid = paramPid;
-    }
-    const existingSeq = AppStorage.get<number>(KEY_THREAD_REFRESH_SEQ);
-    this.lastRefreshSeq = existingSeq === undefined ? 0 : existingSeq;
-    this.bootstrap();
-  }
-
-  onPageShow(): void {
-    const seq = AppStorage.get<number>(KEY_THREAD_REFRESH_SEQ);
-    const refreshTid = AppStorage.get<number>(KEY_THREAD_REFRESH_TID);
-    if (seq !== undefined && seq > this.lastRefreshSeq && refreshTid === this.tid && this.tid > 0) {
-      this.lastRefreshSeq = seq;
-      this.onlyAuthor = false;
-      const refreshPid = AppStorage.get<string>(KEY_THREAD_REFRESH_PID);
-      const refreshLou = AppStorage.get<number>(KEY_THREAD_REFRESH_LOU);
-      if (refreshPid !== undefined && refreshPid.length > 0) {
-        this.pendingScrollPid = refreshPid;
-        this.highlightPid = refreshPid;
-      } else if (refreshLou !== undefined && refreshLou > 0) {
-        this.page = Math.max(1, Math.ceil(refreshLou / POSTS_PER_PAGE));
-      }
-      this.loadPage();
-      return;
-    }
-    if (this.needLogin && CookieStore.getInstance().hasCookie()) {
-      this.loadPage();
-    }
-  }
+  private readyHandled: boolean = false;
+  private bootstrapped: boolean = false;
 
   private async bootstrap(): Promise<void> {
-    const ctx = getContext(this) as common.Context;
+    const ctx = getHostContext(this.getUIContext());
     await CookieStore.getInstance().ensureInit(ctx);
     await DisplayPrefs.getInstance().ensureInit(ctx);
+    this.syncCurrentUserId();
+    this.bootstrapped = true;
     await this.loadPage();
   }
 
-  private showToast(message: string): void {
-    try {
-      promptAction.showToast({ message: message });
-    } catch (error) {
-      // 忽略页面退出等场景下的弹窗异常。
+  private syncCurrentUserId(): void {
+    const cached = LkongApi.getInstance().getCachedCurrentUser();
+    if (cached !== null && cached.uid > 0) {
+      this.currentUserId = cached.uid;
+      return;
+    }
+    if (CookieStore.getInstance().hasCookie()) {
+      LkongApi.getInstance().ensureCurrentUser().then((me) => {
+        this.currentUserId = me.uid;
+      }).catch(() => {
+      });
+    } else {
+      this.currentUserId = 0;
     }
   }
 
-  private async loadPage(): Promise<void> {
-    this.loading = true;
+  private async loadPage(fromRefresh: boolean = false): Promise<void> {
+    if (!fromRefresh) {
+      this.loading = true;
+    }
     this.errorMessage = '';
     this.needLogin = false;
     const targetPid = this.pendingScrollPid;
@@ -230,6 +197,7 @@ struct ThreadPage {
       }
     } finally {
       this.loading = false;
+      this.refreshing = false;
     }
   }
 
@@ -261,22 +229,49 @@ struct ThreadPage {
   }
 
   private goLogin(): void {
-    router.pushUrl({ url: 'pages/LoginPage' }).catch(() => {
-    });
+    AppNavigator.getInstance().push(Routes.LOGIN);
   }
 
   private openUserProfile(uid: number, name: string): void {
     if (uid <= 0) {
       return;
     }
-    router.pushUrl({
-      url: 'pages/UserProfilePage',
-      params: {
-        uid: uid,
-        name: name
+    const params: UserProfileRouteParams = {
+      uid: uid,
+      name: name
+    };
+    AppNavigator.getInstance().push(Routes.USER_PROFILE, params);
+  }
+
+  private openPostImageViewer(postPid: string, clickedUrl: string): void {
+    const allImages = extractImagesFromPosts(this.posts);
+    let idx = -1;
+    for (let i = 0; i < allImages.length; i++) {
+      if (allImages[i].pid === postPid && allImages[i].url === clickedUrl) {
+        idx = i;
+        break;
       }
-    }).catch(() => {
-    });
+    }
+    if (idx < 0) {
+      for (let i = 0; i < allImages.length; i++) {
+        if (allImages[i].url === clickedUrl) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    if (allImages.length === 0) {
+      allImages.push({
+        url: clickedUrl,
+        pid: postPid,
+        floor: '',
+        authorName: ''
+      });
+      idx = 0;
+    }
+    this.previewImages = allImages;
+    this.previewIndex = idx >= 0 ? idx : 0;
+    this.showImageViewer = true;
   }
 
   private toggleOnlyAuthor(): void {
@@ -317,7 +312,10 @@ struct ThreadPage {
     const trimmed = this.jumpInput.trim();
     const parsed = Number(trimmed);
     if (!/^\d+$/.test(trimmed) || isNaN(parsed) || parsed < 1 || (!this.onlyAuthor && parsed > this.totalPages)) {
-      this.showToast(this.onlyAuthor ? '请输入大于 0 的页码' : `请输入 1 到 ${this.totalPages} 之间的页码`);
+      showToast(
+        this.getUIContext(),
+        this.onlyAuthor ? '请输入大于 0 的页码' : `请输入 1 到 ${this.totalPages} 之间的页码`
+      );
       return;
     }
     this.jumpToPage(parsed);
@@ -330,37 +328,55 @@ struct ThreadPage {
     quoteSummary: string
   ): void {
     if (!CookieStore.getInstance().hasCookie()) {
-      this.showToast('请先登录后再回复');
+      showToast(this.getUIContext(), '请先登录后再回复');
       this.goLogin();
       return;
     }
     if (this.isLocked) {
-      this.showToast('该主题已锁定，暂不能回复');
+      showToast(this.getUIContext(), '该主题已锁定，暂不能回复');
       return;
     }
-    router.pushUrl({
-      url: 'pages/ComposePage',
-      params: {
-        mode: 'reply',
-        tid: this.tid,
-        threadTitle: this.displayTitle(),
-        quotePid: quotePid,
-        quoteFloor: quoteFloor,
-        quoteAuthorName: quoteAuthorName,
-        quoteSummary: quoteSummary
-      }
-    }).catch(() => {
-    });
+    const params: ComposeRouteParams = {
+      mode: 'reply',
+      tid: this.tid,
+      threadTitle: this.displayTitle(),
+      quotePid: quotePid,
+      quoteFloor: quoteFloor,
+      quoteAuthorName: quoteAuthorName,
+      quoteSummary: quoteSummary
+    };
+    AppNavigator.getInstance().push(Routes.COMPOSE, params);
+  }
+
+  private openComposeEdit(pid: string, floor: string): void {
+    if (!CookieStore.getInstance().hasCookie()) {
+      showToast(this.getUIContext(), '请先登录后再编辑');
+      this.goLogin();
+      return;
+    }
+    if (this.isLocked) {
+      showToast(this.getUIContext(), '该主题已锁定，暂不能编辑');
+      return;
+    }
+    const isPrimary = (this.firstPid.length > 0 && pid === this.firstPid) || floor === '1';
+    const params: ComposeRouteParams = {
+      mode: 'edit',
+      tid: this.tid,
+      threadTitle: this.displayTitle(),
+      editPid: pid,
+      isPrimaryPost: isPrimary
+    };
+    AppNavigator.getInstance().push(Routes.COMPOSE, params);
   }
 
   private openRateModal(pid: string, floor: string, authorName: string): void {
     if (!CookieStore.getInstance().hasCookie()) {
-      this.showToast('请先登录后再评分');
+      showToast(this.getUIContext(), '请先登录后再评分');
       this.goLogin();
       return;
     }
     if (pid.length === 0) {
-      this.showToast('当前楼层不支持评分');
+      showToast(this.getUIContext(), '当前楼层不支持评分');
       return;
     }
     this.rateTargetPid = pid;
@@ -379,7 +395,7 @@ struct ThreadPage {
     const trimmedNum = this.rateNumInput.trim();
     const num = Number(trimmedNum);
     if (!/^\d+$/.test(trimmedNum) || isNaN(num) || num < 1 || num > 10000000) {
-      this.showToast('请输入 1 到 10000000 的整数龙币');
+      showToast(this.getUIContext(), '请输入 1 到 10000000 的整数龙币');
       return;
     }
     this.rateSubmitting = true;
@@ -415,14 +431,14 @@ struct ThreadPage {
       }
       this.posts = nextPosts;
       this.showRateModal = false;
-      this.showToast(`评分成功（+${num} 龙币）`);
+      showToast(this.getUIContext(), `评分成功（+${num} 龙币）`);
     } catch (error) {
       if (error instanceof ApiError && error.kind === ErrorKind.AUTH) {
-        this.showToast(error.message);
+        showToast(this.getUIContext(), error.message);
         this.goLogin();
       } else {
         const message = error instanceof ApiError ? error.message : '评分失败，请稍后重试。';
-        this.showToast(message);
+        showToast(this.getUIContext(), message);
       }
     } finally {
       this.rateSubmitting = false;
@@ -436,16 +452,41 @@ struct ThreadPage {
     try {
       const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.activeLinkUrl);
       await pasteboard.getSystemPasteboard().setData(data);
-      this.showToast('链接已复制到剪贴板');
+      showToast(this.getUIContext(), '链接已复制到剪贴板');
       this.activeLinkUrl = '';
     } catch (error) {
-      this.showToast('复制失败，请稍后重试');
+      showToast(this.getUIContext(), '复制失败，请稍后重试');
+    }
+  }
+
+  private openActiveLkongLink(): void {
+    const parsed = parseLkongUrl(this.activeLinkUrl);
+    this.activeLinkUrl = '';
+    if (parsed.kind === LkongLinkKind.THREAD) {
+      const params: ThreadRouteParams = {
+        tid: parsed.id,
+        title: `帖子 #${parsed.id}`,
+        pid: parsed.pid
+      };
+      AppNavigator.getInstance().push(Routes.THREAD, params);
+    } else if (parsed.kind === LkongLinkKind.FORUM) {
+      const params: ForumRouteParams = {
+        fid: parsed.id,
+        name: `版块 #${parsed.id}`
+      };
+      AppNavigator.getInstance().push(Routes.FORUM, params);
+    } else if (parsed.kind === LkongLinkKind.USER) {
+      const params: UserProfileRouteParams = {
+        uid: parsed.id,
+        name: ''
+      };
+      AppNavigator.getInstance().push(Routes.USER_PROFILE, params);
     }
   }
 
   private openFavoriteModal(rawPid: string, label: string): void {
     if (!CookieStore.getInstance().hasCookie()) {
-      this.showToast('请先登录后再收藏');
+      showToast(this.getUIContext(), '请先登录后再收藏');
       this.goLogin();
       return;
     }
@@ -454,7 +495,7 @@ struct ThreadPage {
       pid = this.posts[0].pid;
     }
     if (pid.length === 0) {
-      this.showToast('请先回到第 1 页或刷新后再收藏');
+      showToast(this.getUIContext(), '请先回到第 1 页或刷新后再收藏');
       return;
     }
     this.favTargetPid = pid;
@@ -518,13 +559,16 @@ struct ThreadPage {
           }
         }
         this.favGroups = nextList;
-        this.showToast(targetUndo ? `已从「${option.title}」移出` : `已收藏到「${option.title}」`);
+        showToast(
+          this.getUIContext(),
+          targetUndo ? `已从「${option.title}」移出` : `已收藏到「${option.title}」`
+        );
       } else {
-        this.showToast('操作未生效，请稍后重试');
+        showToast(this.getUIContext(), '操作未生效，请稍后重试');
       }
     } catch (error) {
       const message = error instanceof ApiError ? error.message : '操作失败，请稍后重试。';
-      this.showToast(message);
+      showToast(this.getUIContext(), message);
     } finally {
       this.favSubmittingId = 0;
     }
@@ -533,7 +577,7 @@ struct ThreadPage {
   private async submitCreateGroup(): Promise<void> {
     const title = this.newGroupTitle.trim();
     if (title.length === 0) {
-      this.showToast('请输入收藏夹名称');
+      showToast(this.getUIContext(), '请输入收藏夹名称');
       return;
     }
     if (this.creatingGroup || this.favSubmittingId !== 0) {
@@ -547,7 +591,7 @@ struct ThreadPage {
         this.newGroupPublic
       );
       if (created.id <= 0) {
-        this.showToast('创建收藏夹失败');
+        showToast(this.getUIContext(), '创建收藏夹失败');
         return;
       }
       let favorited = false;
@@ -575,830 +619,939 @@ struct ThreadPage {
       this.newGroupTitle = '';
       this.newGroupDesc = '';
       this.showCreateGroupForm = false;
-      this.showToast(favorited ? `已新建「${title}」并完成收藏` : `已新建「${title}」，点击即可收藏`);
+      showToast(
+        this.getUIContext(),
+        favorited ? `已新建「${title}」并完成收藏` : `已新建「${title}」，点击即可收藏`
+      );
     } catch (error) {
       const message = error instanceof ApiError ? error.message : '新建收藏夹失败，请稍后重试。';
-      this.showToast(message);
+      showToast(this.getUIContext(), message);
     } finally {
       this.creatingGroup = false;
     }
   }
 
   build() {
-    Stack() {
-      Column() {
-        Row({ space: 8 }) {
-          Button('返回')
-            .fontSize(12)
-            .height(32)
-            .backgroundColor(getTheme(this.isDark).accentBg)
-            .fontColor(getTheme(this.isDark).accent)
-            .onClick(() => {
-              router.back();
-            })
-          Text(this.displayTitle().length > 0 ? this.displayTitle() : '帖子')
-            .fontSize(16)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(getTheme(this.isDark).textPrimary)
-            .layoutWeight(1)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Button('字号')
-            .fontSize(12)
-            .height(32)
-            .backgroundColor(this.showFontBar ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).accentBg)
-            .fontColor(this.showFontBar ? Color.White : getTheme(this.isDark).accent)
-            .onClick(() => {
-              this.showFontBar = !this.showFontBar;
-            })
-          Button('刷新')
-            .fontSize(12)
-            .height(32)
-            .backgroundColor(getTheme(this.isDark).accentBg)
-            .fontColor(getTheme(this.isDark).accent)
-            .onClick(() => {
-              this.loadPage();
-            })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-
-        if (this.showFontBar) {
-          Column() {
-            Row({ space: 8 }) {
-              Text('正文字号')
-                .fontSize(12)
-                .fontColor(getTheme(this.isDark).textSecondary)
-              Blank()
-              ForEach(FONT_PRESETS, (preset: number) => {
-                Button(`${fontSizeLabel(preset)}`)
-                  .fontSize(12)
-                  .height(28)
-                  .backgroundColor(
-                    this.bodyFontSize === preset
-                      ? getTheme(this.isDark).accentSolid
-                      : getTheme(this.isDark).surfaceMuted
-                  )
-                  .fontColor(
-                    this.bodyFontSize === preset
-                      ? Color.White
-                      : getTheme(this.isDark).textPrimary
-                  )
-                  .onClick(() => {
-                    DisplayPrefs.getInstance().setFontSize(preset);
-                  })
-              }, (preset: number) => `${this.isDark ? 'd' : 'l'}_${this.bodyFontSize}_${preset}`)
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-            .backgroundColor(getTheme(this.isDark).cardBg)
-            .borderRadius(10)
-          }
-          .width('100%')
-          .padding({ left: 16, right: 16, bottom: 8 })
-        }
-
-        if (this.loading) {
-          Column() {
-            LoadingProgress()
-              .width(40)
-              .height(40)
-              .color(getTheme(this.isDark).accent)
-            Text('正在加载帖子...')
-              .fontSize(13)
-              .fontColor(getTheme(this.isDark).textSecondary)
-              .margin({ top: 8 })
-          }
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.needLogin) {
-          Column() {
-            StateView({
-              title: '需要登录',
-              message: '查看帖子需要登录，请先登录账号。',
-              actionText: '去登录',
-              onAction: () => {
-                this.goLogin();
-              }
-            })
-          }
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.errorMessage.length > 0) {
-          Column() {
-            StateView({
-              title: '加载失败',
-              message: this.errorMessage,
-              actionText: '重试',
-              onAction: () => {
-                this.loadPage();
-              }
-            })
-          }
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else {
-          List({ space: 10, scroller: this.listScroller }) {
-            ListItem() {
-              Column({ space: 6 }) {
-                Text(this.displayTitle())
-                  .width('100%')
-                  .fontSize(17)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(getTheme(this.isDark).textPrimary)
-                Row({ space: 8 }) {
-                  Text(this.authorName.length > 0 ? this.authorName : '匿名用户')
-                    .fontSize(12)
-                    .fontColor(
-                      this.authorId > 0 ? getTheme(this.isDark).accent : getTheme(this.isDark).textSecondary
-                    )
-                    .layoutWeight(1)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .onClick(() => {
-                      this.openUserProfile(this.authorId, this.authorName);
-                    })
-                  Text(formatTime(this.postTime))
-                    .fontSize(12)
-                    .fontColor(getTheme(this.isDark).textMuted)
-                }
-                .width('100%')
-
-                Row({ space: 8 }) {
-                  Text(`回复 ${this.replyCount}`)
-                    .fontSize(12)
-                    .fontColor(getTheme(this.isDark).textMuted)
-                  Text(`查看 ${this.viewCount}`)
-                    .fontSize(12)
-                    .fontColor(getTheme(this.isDark).textMuted)
-                  if (this.forumName.length > 0) {
-                    Text(this.forumName)
-                      .fontSize(12)
-                      .fontColor(getTheme(this.isDark).textMuted)
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      .constraintSize({ maxWidth: 96 })
-                  }
-                  Blank()
-                  Button('收藏主题')
-                    .fontSize(11)
-                    .height(26)
-                    .padding({ left: 10, right: 10 })
-                    .backgroundColor(getTheme(this.isDark).accentBg)
-                    .fontColor(getTheme(this.isDark).accent)
-                    .onClick(() => {
-                      this.openFavoriteModal(this.firstPid, '主题主楼');
-                    })
-                  if (this.authorId > 0) {
-                    Button(this.onlyAuthor ? '查看全部' : '只看作者')
-                      .fontSize(11)
-                      .height(26)
-                      .padding({ left: 10, right: 10 })
-                      .backgroundColor(
-                        this.onlyAuthor ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).accentBg
-                      )
-                      .fontColor(this.onlyAuthor ? Color.White : getTheme(this.isDark).accent)
-                      .onClick(() => {
-                        this.toggleOnlyAuthor();
-                      })
-                  }
-                }
-                .width('100%')
-              }
-              .width('100%')
-              .padding(14)
-              .backgroundColor(getTheme(this.isDark).cardBg)
-              .borderRadius(12)
-              .alignItems(HorizontalAlign.Start)
-            }
-
-            if (this.posts.length === 0) {
-              ListItem() {
-                StateView({
-                  title: '暂无楼层',
-                  message: this.onlyAuthor ? '作者当前页没有可显示的发言。' : '当前页没有可显示的楼层内容。'
-                })
-              }
-            }
-
-            ForEach(this.posts, (post: PostItem, index: number) => {
-              ListItem() {
-                PostCard({
-                  pid: post.pid,
-                  floor: post.floor,
-                  authorName: post.authorName,
-                  authorId: post.authorId,
-                  postTime: formatTime(post.postTime),
-                  contentHtml: post.contentHtml,
-                  isAuthor: post.isAuthor,
-                  quotePid: post.quote !== null ? post.quote.pid : '',
-                  quoteStatus: post.quote !== null ? post.quote.status : '',
-                  quoteAuthorId: post.quote !== null ? post.quote.authorId : 0,
-                  quoteAuthorName: post.quote !== null ? post.quote.authorName : '',
-                  quoteContentHtml: post.quote !== null ? post.quote.contentHtml : '',
-                  rates: post.rates,
-                  isHighlighted: this.highlightPid.length > 0 && post.pid === this.highlightPid,
-                  canReply: !this.isLocked,
-                  canRate: true,
-                  canFavorite: true,
-                  onImageClick: (url: string) => {
-                    this.previewImageUrl = url;
-                  },
-                  onLinkClick: (url: string) => {
-                    this.activeLinkUrl = url;
-                  },
-                  onAuthorClick: (uid: number, name: string) => {
-                    this.openUserProfile(uid, name);
-                  },
-                  onFavoriteClick: (pid: string, floor: string) => {
-                    const label = floor.length > 0 ? `第 ${floor} 楼` : '该楼层';
-                    this.openFavoriteModal(pid, label);
-                  },
-                  onReplyClick: (pid: string, floor: string, authorName: string, summary: string) => {
-                    this.openComposeReply(pid, floor, authorName, summary);
-                  },
-                  onRateClick: (pid: string, floor: string, authorName: string) => {
-                    this.openRateModal(pid, floor, authorName);
-                  }
-                })
-              }
-            }, (post: PostItem, index: number) =>
-              post.pid.length > 0
-                ? `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.pid}_${post.quote !== null ? 'q' : 'nq'}_${post.rates.length}_${post.pid === this.highlightPid ? 'hl' : 'nhl'}`
-                : `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.floor}_${index}`
-            )
-          }
-          .layoutWeight(1)
-          .padding({ left: 16, right: 16 })
-          .scrollBar(BarState.Auto)
-
-          Row({ space: 8 }) {
-            Button('上一页')
-              .fontSize(12)
-              .height(34)
-              .backgroundColor(
-                this.page > 1 ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).disabledBtnBg
-              )
-              .fontColor(this.page > 1 ? Color.White : getTheme(this.isDark).disabledBtnText)
-              .enabled(this.page > 1)
-              .onClick(() => {
-                this.previousPage();
-              })
-            Button(this.onlyAuthor ? `仅作者·${this.page}页 ▾` : `${this.page} / ${this.totalPages} 页 ▾`)
-              .fontSize(12)
-              .height(34)
-              .backgroundColor(getTheme(this.isDark).cardBg)
-              .fontColor(getTheme(this.isDark).textPrimary)
-              .onClick(() => {
-                this.jumpInput = '';
-                this.showJumpModal = true;
-              })
-            Button('下一页')
-              .fontSize(12)
-              .height(34)
-              .backgroundColor(
-                this.hasMore ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).disabledBtnBg
-              )
-              .fontColor(this.hasMore ? Color.White : getTheme(this.isDark).disabledBtnText)
-              .enabled(this.hasMore)
-              .onClick(() => {
-                this.nextPage();
-              })
-            Button(this.isLocked ? '已锁' : '回复')
-              .fontSize(12)
-              .height(34)
-              .backgroundColor(
-                this.isLocked ? getTheme(this.isDark).disabledBtnBg : getTheme(this.isDark).accentSolid
-              )
-              .fontColor(this.isLocked ? getTheme(this.isDark).disabledBtnText : Color.White)
-              .enabled(!this.isLocked)
-              .onClick(() => {
-                this.openComposeReply('', '', '', '');
-              })
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-        }
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor(getTheme(this.isDark).pageBg)
-
-      if (this.showRateModal) {
+    NavDestination() {
+      Stack() {
         Column() {
-          Column({ space: 12 }) {
-            Text('楼层评分')
+          Row({ space: 8 }) {
+            Button('返回')
+              .fontSize(12)
+              .height(32)
+              .backgroundColor(getTheme(this.isDark).accentBg)
+              .fontColor(getTheme(this.isDark).accent)
+              .onClick(() => {
+                AppNavigator.getInstance().pop();
+              })
+            Text(this.displayTitle().length > 0 ? this.displayTitle() : '帖子')
               .fontSize(16)
               .fontWeight(FontWeight.Bold)
               .fontColor(getTheme(this.isDark).textPrimary)
-            Text(
-              `对象：${this.rateTargetFloor.length > 0 ? `${this.rateTargetFloor} 楼 ` : ''}${this.rateTargetAuthor.length > 0 ? `@${this.rateTargetAuthor}` : ''}`
-            )
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Button('字号')
               .fontSize(12)
-              .fontColor(getTheme(this.isDark).textSecondary)
-
-            Row({ space: 6 }) {
-              ForEach(RATE_PRESETS, (preset: number) => {
-                Button(`+${preset}`)
-                  .fontSize(12)
-                  .height(30)
-                  .layoutWeight(1)
-                  .backgroundColor(
-                    this.rateNumInput === `${preset}`
-                      ? getTheme(this.isDark).accentSolid
-                      : getTheme(this.isDark).surfaceMuted
-                  )
-                  .fontColor(
-                    this.rateNumInput === `${preset}`
-                      ? Color.White
-                      : getTheme(this.isDark).textPrimary
-                  )
-                  .onClick(() => {
-                    this.rateNumInput = `${preset}`;
-                  })
-              }, (preset: number) => `${this.isDark ? 'd' : 'l'}_rp_${this.rateNumInput}_${preset}`)
-            }
-            .width('100%')
-
-            TextInput({
-              placeholder: '龙币数量（1 - 10000000）',
-              text: this.rateNumInput
-            })
-              .type(InputType.Number)
-              .height(40)
-              .fontSize(14)
-              .fontColor(getTheme(this.isDark).textPrimary)
-              .placeholderColor(getTheme(this.isDark).textMuted)
-              .backgroundColor(getTheme(this.isDark).inputBg)
-              .onChange((val: string) => {
-                this.rateNumInput = val;
+              .height(32)
+              .backgroundColor(this.showFontBar ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).accentBg)
+              .fontColor(this.showFontBar ? Color.White : getTheme(this.isDark).accent)
+              .onClick(() => {
+                this.showFontBar = !this.showFontBar;
               })
-
-            TextInput({
-              placeholder: '操作理由（选填）',
-              text: this.rateReasonInput
-            })
-              .height(40)
-              .fontSize(14)
-              .fontColor(getTheme(this.isDark).textPrimary)
-              .placeholderColor(getTheme(this.isDark).textMuted)
-              .backgroundColor(getTheme(this.isDark).inputBg)
-              .onChange((val: string) => {
-                this.rateReasonInput = val;
+            Button('刷新')
+              .fontSize(12)
+              .height(32)
+              .backgroundColor(getTheme(this.isDark).accentBg)
+              .fontColor(getTheme(this.isDark).accent)
+              .onClick(() => {
+                this.loadPage();
               })
-
-            Row({ space: 10 }) {
-              Button('取消')
-                .fontSize(13)
-                .height(36)
-                .layoutWeight(1)
-                .backgroundColor(getTheme(this.isDark).surfaceMuted)
-                .fontColor(getTheme(this.isDark).textSecondary)
-                .onClick(() => {
-                  this.showRateModal = false;
-                })
-              Button(this.rateSubmitting ? '提交中...' : '确定评分')
-                .fontSize(13)
-                .height(36)
-                .layoutWeight(1)
-                .backgroundColor(
-                  this.rateSubmitting ? getTheme(this.isDark).disabledBtnBg : getTheme(this.isDark).accentSolid
-                )
-                .fontColor(this.rateSubmitting ? getTheme(this.isDark).disabledBtnText : Color.White)
-                .enabled(!this.rateSubmitting)
-                .onClick(() => {
-                  this.submitRate();
-                })
-            }
-            .width('100%')
           }
-          .width('86%')
-          .padding(16)
-          .backgroundColor(getTheme(this.isDark).cardBg)
-          .borderRadius(14)
-          .alignItems(HorizontalAlign.Start)
-          .onClick(() => {
-          })
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+
+          if (this.showFontBar) {
+            Column() {
+              Row({ space: 8 }) {
+                Text('正文字号')
+                  .fontSize(12)
+                  .fontColor(getTheme(this.isDark).textSecondary)
+                Blank()
+                ForEach(FONT_PRESETS, (preset: number) => {
+                  Button(`${fontSizeLabel(preset)}`)
+                    .fontSize(12)
+                    .height(28)
+                    .backgroundColor(
+                      this.bodyFontSize === preset
+                        ? getTheme(this.isDark).accentSolid
+                        : getTheme(this.isDark).surfaceMuted
+                    )
+                    .fontColor(
+                      this.bodyFontSize === preset
+                        ? Color.White
+                        : getTheme(this.isDark).textPrimary
+                    )
+                    .onClick(() => {
+                      DisplayPrefs.getInstance().setFontSize(preset);
+                    })
+                }, (preset: number) => `${this.isDark ? 'd' : 'l'}_${this.bodyFontSize}_${preset}`)
+              }
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+              .backgroundColor(getTheme(this.isDark).cardBg)
+              .borderRadius(10)
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, bottom: 8 })
+          }
+
+          if (this.loading) {
+            Column() {
+              LoadingProgress()
+                .width(40)
+                .height(40)
+                .color(getTheme(this.isDark).accent)
+              Text('正在加载帖子...')
+                .fontSize(13)
+                .fontColor(getTheme(this.isDark).textSecondary)
+                .margin({ top: 8 })
+            }
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.needLogin) {
+            Column() {
+              StateView({
+                title: '需要登录',
+                message: '查看帖子需要登录，请先登录账号。',
+                actionText: '去登录',
+                onAction: () => {
+                  this.goLogin();
+                }
+              })
+            }
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.errorMessage.length > 0) {
+            Column() {
+              StateView({
+                title: '加载失败',
+                message: this.errorMessage,
+                actionText: '重试',
+                onAction: () => {
+                  this.loadPage();
+                }
+              })
+            }
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else {
+            Stack({ alignContent: Alignment.BottomEnd }) {
+              Refresh({ refreshing: $$this.refreshing }) {
+                List({ space: 10, scroller: this.listScroller }) {
+                  ListItem() {
+                    Column({ space: 6 }) {
+                      Text(this.displayTitle())
+                        .width('100%')
+                        .fontSize(17)
+                        .fontWeight(FontWeight.Bold)
+                        .fontColor(getTheme(this.isDark).textPrimary)
+                      Row({ space: 8 }) {
+                        Text(this.authorName.length > 0 ? this.authorName : '匿名用户')
+                          .fontSize(12)
+                          .fontColor(
+                            this.authorId > 0 ? getTheme(this.isDark).accent : getTheme(this.isDark).textSecondary
+                          )
+                          .layoutWeight(1)
+                          .maxLines(1)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .onClick(() => {
+                            this.openUserProfile(this.authorId, this.authorName);
+                          })
+                        Text(formatTime(this.postTime))
+                          .fontSize(12)
+                          .fontColor(getTheme(this.isDark).textMuted)
+                      }
+                      .width('100%')
+
+                      Row({ space: 8 }) {
+                        Text(`回复 ${this.replyCount}`)
+                          .fontSize(12)
+                          .fontColor(getTheme(this.isDark).textMuted)
+                        Text(`查看 ${this.viewCount}`)
+                          .fontSize(12)
+                          .fontColor(getTheme(this.isDark).textMuted)
+                        if (this.forumName.length > 0) {
+                          Text(this.forumName)
+                            .fontSize(12)
+                            .fontColor(getTheme(this.isDark).textMuted)
+                            .maxLines(1)
+                            .textOverflow({ overflow: TextOverflow.Ellipsis })
+                            .constraintSize({ maxWidth: 96 })
+                        }
+                        Blank()
+                        Button('收藏主题')
+                          .fontSize(11)
+                          .height(26)
+                          .padding({ left: 10, right: 10 })
+                          .backgroundColor(getTheme(this.isDark).accentBg)
+                          .fontColor(getTheme(this.isDark).accent)
+                          .onClick(() => {
+                            this.openFavoriteModal(this.firstPid, '主题主楼');
+                          })
+                        if (this.authorId > 0) {
+                          Button(this.onlyAuthor ? '查看全部' : '只看作者')
+                            .fontSize(11)
+                            .height(26)
+                            .padding({ left: 10, right: 10 })
+                            .backgroundColor(
+                              this.onlyAuthor ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).accentBg
+                            )
+                            .fontColor(this.onlyAuthor ? Color.White : getTheme(this.isDark).accent)
+                            .onClick(() => {
+                              this.toggleOnlyAuthor();
+                            })
+                        }
+                      }
+                      .width('100%')
+                    }
+                    .width('100%')
+                    .padding(14)
+                    .backgroundColor(getTheme(this.isDark).cardBg)
+                    .borderRadius(12)
+                    .alignItems(HorizontalAlign.Start)
+                  }
+
+                  if (this.posts.length === 0) {
+                    ListItem() {
+                      StateView({
+                        title: '暂无楼层',
+                        message: this.onlyAuthor ? '作者当前页没有可显示的发言。' : '当前页没有可显示的楼层内容。'
+                      })
+                    }
+                  }
+
+                  ForEach(this.posts, (post: PostItem, index: number) => {
+                    ListItem() {
+                      PostCard({
+                        pid: post.pid,
+                        floor: post.floor,
+                        authorName: post.authorName,
+                        authorId: post.authorId,
+                        postTime: formatTime(post.postTime),
+                        contentHtml: post.contentHtml,
+                        isAuthor: post.isAuthor,
+                        quotePid: post.quote !== null ? post.quote.pid : '',
+                        quoteStatus: post.quote !== null ? post.quote.status : '',
+                        quoteAuthorId: post.quote !== null ? post.quote.authorId : 0,
+                        quoteAuthorName: post.quote !== null ? post.quote.authorName : '',
+                        quoteContentHtml: post.quote !== null ? post.quote.contentHtml : '',
+                        rates: post.rates,
+                        isHighlighted: this.highlightPid.length > 0 && post.pid === this.highlightPid,
+                        canReply: !this.isLocked,
+                        canEdit: !this.isLocked && this.currentUserId > 0 && post.authorId === this.currentUserId,
+                        canRate: true,
+                        canFavorite: true,
+                        onImageClick: (url: string) => {
+                          this.openPostImageViewer(post.pid, url);
+                        },
+                        onLinkClick: (url: string) => {
+                          this.activeLinkUrl = url;
+                        },
+                        onAuthorClick: (uid: number, name: string) => {
+                          this.openUserProfile(uid, name);
+                        },
+                        onFavoriteClick: (pid: string, floor: string) => {
+                          const label = floor.length > 0 ? `第 ${floor} 楼` : '该楼层';
+                          this.openFavoriteModal(pid, label);
+                        },
+                        onReplyClick: (pid: string, floor: string, authorName: string, summary: string) => {
+                          this.openComposeReply(pid, floor, authorName, summary);
+                        },
+                        onEditClick: (pid: string, floor: string) => {
+                          this.openComposeEdit(pid, floor);
+                        },
+                        onRateClick: (pid: string, floor: string, authorName: string) => {
+                          this.openRateModal(pid, floor, authorName);
+                        }
+                      })
+                    }
+                  }, (post: PostItem, index: number) =>
+                    post.pid.length > 0
+                      ? `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.pid}_${post.quote !== null ? 'q' : 'nq'}_${post.rates.length}_${post.pid === this.highlightPid ? 'hl' : 'nhl'}_${this.currentUserId}`
+                      : `${this.onlyAuthor ? 'a' : 'all'}_${this.page}_${post.floor}_${index}`
+                  )
+                }
+                .width('100%')
+                .height('100%')
+                .padding({ left: 16, right: 16 })
+                .scrollBar(BarState.Auto)
+                .onScrollIndex((start: number) => {
+                  this.showScrollTop = start >= 2;
+                })
+              }
+              .width('100%')
+              .height('100%')
+              .onRefreshing(() => {
+                this.loadPage(true);
+              })
+
+              if (this.showScrollTop) {
+                Button('顶部')
+                  .fontSize(11)
+                  .height(32)
+                  .backgroundColor(getTheme(this.isDark).accentSolid)
+                  .fontColor(Color.White)
+                  .borderRadius(16)
+                  .margin({ right: 20, bottom: 14 })
+                  .onClick(() => {
+                    this.listScroller.scrollToIndex(0, true);
+                  })
+              }
+            }
+            .layoutWeight(1)
+
+            Row({ space: 8 }) {
+              Button('上一页')
+                .fontSize(12)
+                .height(34)
+                .backgroundColor(
+                  this.page > 1 ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).disabledBtnBg
+                )
+                .fontColor(this.page > 1 ? Color.White : getTheme(this.isDark).disabledBtnText)
+                .enabled(this.page > 1)
+                .onClick(() => {
+                  this.previousPage();
+                })
+              Button(this.onlyAuthor ? `仅作者·${this.page}页 ▾` : `${this.page} / ${this.totalPages} 页 ▾`)
+                .fontSize(12)
+                .height(34)
+                .backgroundColor(getTheme(this.isDark).cardBg)
+                .fontColor(getTheme(this.isDark).textPrimary)
+                .onClick(() => {
+                  this.jumpInput = '';
+                  this.showJumpModal = true;
+                })
+              Button('下一页')
+                .fontSize(12)
+                .height(34)
+                .backgroundColor(
+                  this.hasMore ? getTheme(this.isDark).accentSolid : getTheme(this.isDark).disabledBtnBg
+                )
+                .fontColor(this.hasMore ? Color.White : getTheme(this.isDark).disabledBtnText)
+                .enabled(this.hasMore)
+                .onClick(() => {
+                  this.nextPage();
+                })
+              Button(this.isLocked ? '已锁' : '回复')
+                .fontSize(12)
+                .height(34)
+                .backgroundColor(
+                  this.isLocked ? getTheme(this.isDark).disabledBtnBg : getTheme(this.isDark).accentSolid
+                )
+                .fontColor(this.isLocked ? getTheme(this.isDark).disabledBtnText : Color.White)
+                .enabled(!this.isLocked)
+                .onClick(() => {
+                  this.openComposeReply('', '', '', '');
+                })
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.Center)
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+          }
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#80000000')
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.showRateModal = false;
-        })
-      }
+        .backgroundColor(getTheme(this.isDark).pageBg)
 
-      if (this.showFavoriteModal) {
-        Column() {
-          Column({ space: 12 }) {
-            Row() {
-              Column({ space: 2 }) {
-                Text('收藏到云端分组')
-                  .fontSize(16)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(getTheme(this.isDark).textPrimary)
-                Text(`目标：${this.favTargetLabel}`)
-                  .fontSize(12)
-                  .fontColor(getTheme(this.isDark).textSecondary)
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-
-              Button('刷新')
-                .fontSize(12)
-                .height(28)
-                .backgroundColor(getTheme(this.isDark).surfaceMuted)
+        if (this.showRateModal) {
+          Column() {
+            Column({ space: 12 }) {
+              Text('楼层评分')
+                .fontSize(16)
+                .fontWeight(FontWeight.Bold)
                 .fontColor(getTheme(this.isDark).textPrimary)
-                .onClick(() => {
-                  this.loadFavoriteGroups();
-                })
-            }
-            .width('100%')
+              Text(
+                `对象：${this.rateTargetFloor.length > 0 ? `${this.rateTargetFloor} 楼 ` : ''}${this.rateTargetAuthor.length > 0 ? `@${this.rateTargetAuthor}` : ''}`
+              )
+                .fontSize(12)
+                .fontColor(getTheme(this.isDark).textSecondary)
 
-            if (this.favLoading) {
-              Row({ space: 8 }) {
-                LoadingProgress()
-                  .width(24)
-                  .height(24)
-                  .color(getTheme(this.isDark).accent)
-                Text('正在获取云端收藏夹...')
-                  .fontSize(13)
-                  .fontColor(getTheme(this.isDark).textSecondary)
+              Row({ space: 6 }) {
+                ForEach(RATE_PRESETS, (preset: number) => {
+                  Button(`+${preset}`)
+                    .fontSize(12)
+                    .height(30)
+                    .layoutWeight(1)
+                    .backgroundColor(
+                      this.rateNumInput === `${preset}`
+                        ? getTheme(this.isDark).accentSolid
+                        : getTheme(this.isDark).surfaceMuted
+                    )
+                    .fontColor(
+                      this.rateNumInput === `${preset}`
+                        ? Color.White
+                        : getTheme(this.isDark).textPrimary
+                    )
+                    .onClick(() => {
+                      this.rateNumInput = `${preset}`;
+                    })
+                }, (preset: number) => `${this.isDark ? 'd' : 'l'}_rp_${this.rateNumInput}_${preset}`)
               }
               .width('100%')
-              .padding({ top: 12, bottom: 12 })
-              .justifyContent(FlexAlign.Center)
-            } else if (this.favError.length > 0) {
-              Column({ space: 8 }) {
-                Text(this.favError)
+
+              TextInput({
+                placeholder: '龙币数量（1 - 10000000）',
+                text: this.rateNumInput
+              })
+                .type(InputType.Number)
+                .height(40)
+                .fontSize(14)
+                .fontColor(getTheme(this.isDark).textPrimary)
+                .placeholderColor(getTheme(this.isDark).textMuted)
+                .backgroundColor(getTheme(this.isDark).inputBg)
+                .onChange((val: string) => {
+                  this.rateNumInput = val;
+                })
+
+              TextInput({
+                placeholder: '操作理由（选填）',
+                text: this.rateReasonInput
+              })
+                .height(40)
+                .fontSize(14)
+                .fontColor(getTheme(this.isDark).textPrimary)
+                .placeholderColor(getTheme(this.isDark).textMuted)
+                .backgroundColor(getTheme(this.isDark).inputBg)
+                .onChange((val: string) => {
+                  this.rateReasonInput = val;
+                })
+
+              Row({ space: 10 }) {
+                Button('取消')
                   .fontSize(13)
-                  .fontColor(getTheme(this.isDark).dangerText)
-                Button('重试')
+                  .height(36)
+                  .layoutWeight(1)
+                  .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                  .fontColor(getTheme(this.isDark).textSecondary)
+                  .onClick(() => {
+                    this.showRateModal = false;
+                  })
+                Button(this.rateSubmitting ? '提交中...' : '确定评分')
+                  .fontSize(13)
+                  .height(36)
+                  .layoutWeight(1)
+                  .backgroundColor(
+                    this.rateSubmitting ? getTheme(this.isDark).disabledBtnBg : getTheme(this.isDark).accentSolid
+                  )
+                  .fontColor(this.rateSubmitting ? getTheme(this.isDark).disabledBtnText : Color.White)
+                  .enabled(!this.rateSubmitting)
+                  .onClick(() => {
+                    this.submitRate();
+                  })
+              }
+              .width('100%')
+            }
+            .width('86%')
+            .padding(16)
+            .backgroundColor(getTheme(this.isDark).cardBg)
+            .borderRadius(14)
+            .alignItems(HorizontalAlign.Start)
+            .onClick(() => {
+            })
+          }
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#80000000')
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.showRateModal = false;
+          })
+        }
+
+        if (this.showFavoriteModal) {
+          Column() {
+            Column({ space: 12 }) {
+              Row() {
+                Column({ space: 2 }) {
+                  Text('收藏到云端分组')
+                    .fontSize(16)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(getTheme(this.isDark).textPrimary)
+                  Text(`目标：${this.favTargetLabel}`)
+                    .fontSize(12)
+                    .fontColor(getTheme(this.isDark).textSecondary)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+
+                Button('刷新')
                   .fontSize(12)
-                  .height(30)
-                  .backgroundColor(getTheme(this.isDark).accentBg)
-                  .fontColor(getTheme(this.isDark).accent)
+                  .height(28)
+                  .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                  .fontColor(getTheme(this.isDark).textPrimary)
                   .onClick(() => {
                     this.loadFavoriteGroups();
                   })
               }
               .width('100%')
-              .padding({ top: 8, bottom: 8 })
-              .alignItems(HorizontalAlign.Center)
-            } else {
-              if (this.favGroups.length === 0) {
-                Text('你还没有云端收藏夹，请先在下方新建。')
-                  .fontSize(13)
-                  .fontColor(getTheme(this.isDark).textSecondary)
-                  .padding({ top: 6, bottom: 6 })
-              } else {
-                Scroll() {
-                  Column({ space: 8 }) {
-                    ForEach(this.favGroups, (group: FavoriteGroupOption) => {
-                      Row({ space: 8 }) {
-                        Column({ space: 2 }) {
-                          Text(group.title)
-                            .fontSize(14)
-                            .fontWeight(FontWeight.Medium)
-                            .fontColor(getTheme(this.isDark).textPrimary)
-                            .maxLines(1)
-                            .textOverflow({ overflow: TextOverflow.Ellipsis })
-                          Text(group.isPublic ? '公开' : '私密')
-                            .fontSize(11)
-                            .fontColor(getTheme(this.isDark).textMuted)
-                        }
-                        .layoutWeight(1)
-                        .alignItems(HorizontalAlign.Start)
 
-                        Button(
-                          this.favSubmittingId === group.id
-                            ? '处理中'
-                            : (group.hasFavorited ? '已收藏' : '收藏')
-                        )
-                          .fontSize(12)
-                          .height(30)
-                          .backgroundColor(
-                            group.hasFavorited
-                              ? getTheme(this.isDark).accentSolid
-                              : getTheme(this.isDark).accentBg
-                          )
-                          .fontColor(
-                            group.hasFavorited
-                              ? Color.White
-                              : getTheme(this.isDark).accent
-                          )
-                          .enabled(this.favSubmittingId === 0 && !this.creatingGroup)
-                          .onClick(() => {
-                            this.toggleGroupFavorite(group);
-                          })
-                      }
-                      .width('100%')
-                      .padding(10)
-                      .backgroundColor(getTheme(this.isDark).surfaceMuted)
-                      .borderRadius(8)
-                    }, (group: FavoriteGroupOption) =>
-                      `${this.isDark ? 'd' : 'l'}_${group.id}_${group.hasFavorited ? '1' : '0'}_${this.favSubmittingId}`
-                    )
-                  }
-                  .width('100%')
+              if (this.favLoading) {
+                Row({ space: 8 }) {
+                  LoadingProgress()
+                    .width(24)
+                    .height(24)
+                    .color(getTheme(this.isDark).accent)
+                  Text('正在获取云端收藏夹...')
+                    .fontSize(13)
+                    .fontColor(getTheme(this.isDark).textSecondary)
                 }
-                .constraintSize({ maxHeight: 220 })
-              }
-
-              Button(this.showCreateGroupForm ? '收起新建表单' : '+ 新建云端收藏夹')
-                .fontSize(12)
-                .height(32)
                 .width('100%')
-                .backgroundColor(getTheme(this.isDark).surfaceMuted)
-                .fontColor(getTheme(this.isDark).accent)
-                .onClick(() => {
-                  this.showCreateGroupForm = !this.showCreateGroupForm;
-                })
-
-              if (this.showCreateGroupForm) {
+                .padding({ top: 12, bottom: 12 })
+                .justifyContent(FlexAlign.Center)
+              } else if (this.favError.length > 0) {
                 Column({ space: 8 }) {
-                  TextInput({
-                    placeholder: '收藏夹名称（必填）',
-                    text: this.newGroupTitle
-                  })
-                    .height(38)
+                  Text(this.favError)
                     .fontSize(13)
-                    .fontColor(getTheme(this.isDark).textPrimary)
-                    .placeholderColor(getTheme(this.isDark).textMuted)
-                    .backgroundColor(getTheme(this.isDark).inputBg)
-                    .onChange((val: string) => {
-                      this.newGroupTitle = val;
+                    .fontColor(getTheme(this.isDark).dangerText)
+                  Button('重试')
+                    .fontSize(12)
+                    .height(30)
+                    .backgroundColor(getTheme(this.isDark).accentBg)
+                    .fontColor(getTheme(this.isDark).accent)
+                    .onClick(() => {
+                      this.loadFavoriteGroups();
                     })
-                  TextInput({
-                    placeholder: '简介（选填）',
-                    text: this.newGroupDesc
-                  })
-                    .height(38)
-                    .fontSize(13)
-                    .fontColor(getTheme(this.isDark).textPrimary)
-                    .placeholderColor(getTheme(this.isDark).textMuted)
-                    .backgroundColor(getTheme(this.isDark).inputBg)
-                    .onChange((val: string) => {
-                      this.newGroupDesc = val;
-                    })
-                  Row({ space: 8 }) {
-                    Text('可见性：')
-                      .fontSize(12)
-                      .fontColor(getTheme(this.isDark).textSecondary)
-                    Button('公开')
-                      .fontSize(12)
-                      .height(28)
-                      .backgroundColor(
-                        this.newGroupPublic
-                          ? getTheme(this.isDark).accentSolid
-                          : getTheme(this.isDark).surfaceMuted
-                      )
-                      .fontColor(this.newGroupPublic ? Color.White : getTheme(this.isDark).textPrimary)
-                      .onClick(() => {
-                        this.newGroupPublic = true;
-                      })
-                    Button('私密')
-                      .fontSize(12)
-                      .height(28)
-                      .backgroundColor(
-                        !this.newGroupPublic
-                          ? getTheme(this.isDark).accentSolid
-                          : getTheme(this.isDark).surfaceMuted
-                      )
-                      .fontColor(!this.newGroupPublic ? Color.White : getTheme(this.isDark).textPrimary)
-                      .onClick(() => {
-                        this.newGroupPublic = false;
-                      })
-                    Blank()
-                    Button(this.creatingGroup ? '创建中...' : '创建并收藏')
-                      .fontSize(12)
-                      .height(30)
-                      .backgroundColor(
-                        this.creatingGroup
-                          ? getTheme(this.isDark).disabledBtnBg
-                          : getTheme(this.isDark).accentSolid
-                      )
-                      .fontColor(this.creatingGroup ? getTheme(this.isDark).disabledBtnText : Color.White)
-                      .enabled(!this.creatingGroup)
-                      .onClick(() => {
-                        this.submitCreateGroup();
-                      })
-                  }
-                  .width('100%')
                 }
                 .width('100%')
-                .padding(10)
-                .backgroundColor(getTheme(this.isDark).surfaceMuted)
-                .borderRadius(8)
+                .padding({ top: 8, bottom: 8 })
+                .alignItems(HorizontalAlign.Center)
+              } else {
+                if (this.favGroups.length === 0) {
+                  Text('你还没有云端收藏夹，请先在下方新建。')
+                    .fontSize(13)
+                    .fontColor(getTheme(this.isDark).textSecondary)
+                    .padding({ top: 6, bottom: 6 })
+                } else {
+                  Scroll() {
+                    Column({ space: 8 }) {
+                      ForEach(this.favGroups, (group: FavoriteGroupOption) => {
+                        Row({ space: 8 }) {
+                          Column({ space: 2 }) {
+                            Text(group.title)
+                              .fontSize(14)
+                              .fontWeight(FontWeight.Medium)
+                              .fontColor(getTheme(this.isDark).textPrimary)
+                              .maxLines(1)
+                              .textOverflow({ overflow: TextOverflow.Ellipsis })
+                            Text(group.isPublic ? '公开' : '私密')
+                              .fontSize(11)
+                              .fontColor(getTheme(this.isDark).textMuted)
+                          }
+                          .layoutWeight(1)
+                          .alignItems(HorizontalAlign.Start)
+
+                          Button(
+                            this.favSubmittingId === group.id
+                              ? '处理中'
+                              : (group.hasFavorited ? '已收藏' : '收藏')
+                          )
+                            .fontSize(12)
+                            .height(30)
+                            .backgroundColor(
+                              group.hasFavorited
+                                ? getTheme(this.isDark).accentSolid
+                                : getTheme(this.isDark).accentBg
+                            )
+                            .fontColor(
+                              group.hasFavorited
+                                ? Color.White
+                                : getTheme(this.isDark).accent
+                            )
+                            .enabled(this.favSubmittingId === 0 && !this.creatingGroup)
+                            .onClick(() => {
+                              this.toggleGroupFavorite(group);
+                            })
+                        }
+                        .width('100%')
+                        .padding(10)
+                        .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                        .borderRadius(8)
+                      }, (group: FavoriteGroupOption) =>
+                        `${this.isDark ? 'd' : 'l'}_${group.id}_${group.hasFavorited ? '1' : '0'}_${this.favSubmittingId}`
+                      )
+                    }
+                    .width('100%')
+                  }
+                  .constraintSize({ maxHeight: 220 })
+                }
+
+                Button(this.showCreateGroupForm ? '收起新建表单' : '+ 新建云端收藏夹')
+                  .fontSize(12)
+                  .height(32)
+                  .width('100%')
+                  .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                  .fontColor(getTheme(this.isDark).accent)
+                  .onClick(() => {
+                    this.showCreateGroupForm = !this.showCreateGroupForm;
+                  })
+
+                if (this.showCreateGroupForm) {
+                  Column({ space: 8 }) {
+                    TextInput({
+                      placeholder: '收藏夹名称（必填）',
+                      text: this.newGroupTitle
+                    })
+                      .height(38)
+                      .fontSize(13)
+                      .fontColor(getTheme(this.isDark).textPrimary)
+                      .placeholderColor(getTheme(this.isDark).textMuted)
+                      .backgroundColor(getTheme(this.isDark).inputBg)
+                      .onChange((val: string) => {
+                        this.newGroupTitle = val;
+                      })
+                    TextInput({
+                      placeholder: '简介（选填）',
+                      text: this.newGroupDesc
+                    })
+                      .height(38)
+                      .fontSize(13)
+                      .fontColor(getTheme(this.isDark).textPrimary)
+                      .placeholderColor(getTheme(this.isDark).textMuted)
+                      .backgroundColor(getTheme(this.isDark).inputBg)
+                      .onChange((val: string) => {
+                        this.newGroupDesc = val;
+                      })
+                    Row({ space: 8 }) {
+                      Text('可见性：')
+                        .fontSize(12)
+                        .fontColor(getTheme(this.isDark).textSecondary)
+                      Button('公开')
+                        .fontSize(12)
+                        .height(28)
+                        .backgroundColor(
+                          this.newGroupPublic
+                            ? getTheme(this.isDark).accentSolid
+                            : getTheme(this.isDark).surfaceMuted
+                        )
+                        .fontColor(this.newGroupPublic ? Color.White : getTheme(this.isDark).textPrimary)
+                        .onClick(() => {
+                          this.newGroupPublic = true;
+                        })
+                      Button('私密')
+                        .fontSize(12)
+                        .height(28)
+                        .backgroundColor(
+                          !this.newGroupPublic
+                            ? getTheme(this.isDark).accentSolid
+                            : getTheme(this.isDark).surfaceMuted
+                        )
+                        .fontColor(!this.newGroupPublic ? Color.White : getTheme(this.isDark).textPrimary)
+                        .onClick(() => {
+                          this.newGroupPublic = false;
+                        })
+                      Blank()
+                      Button(this.creatingGroup ? '创建中...' : '创建并收藏')
+                        .fontSize(12)
+                        .height(30)
+                        .backgroundColor(
+                          this.creatingGroup
+                            ? getTheme(this.isDark).disabledBtnBg
+                            : getTheme(this.isDark).accentSolid
+                        )
+                        .fontColor(this.creatingGroup ? getTheme(this.isDark).disabledBtnText : Color.White)
+                        .enabled(!this.creatingGroup)
+                        .onClick(() => {
+                          this.submitCreateGroup();
+                        })
+                    }
+                    .width('100%')
+                  }
+                  .width('100%')
+                  .padding(10)
+                  .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                  .borderRadius(8)
+                }
               }
-            }
 
-            Button('关闭')
-              .fontSize(13)
-              .height(34)
-              .width('100%')
-              .backgroundColor(getTheme(this.isDark).surfaceMuted)
-              .fontColor(getTheme(this.isDark).textSecondary)
-              .onClick(() => {
-                this.showFavoriteModal = false;
-              })
-          }
-          .width('88%')
-          .padding(16)
-          .backgroundColor(getTheme(this.isDark).cardBg)
-          .borderRadius(14)
-          .alignItems(HorizontalAlign.Start)
-          .onClick(() => {
-          })
-        }
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#80000000')
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.showFavoriteModal = false;
-        })
-      }
-
-      if (this.showJumpModal) {
-        Column() {
-          Column({ space: 12 }) {
-            Text('快速跳页')
-              .fontSize(16)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(getTheme(this.isDark).textPrimary)
-            Text(
-              this.onlyAuthor
-                ? `当前仅看作者第 ${this.page} 页`
-                : `当前第 ${this.page} 页，共 ${this.totalPages} 页`
-            )
-              .fontSize(12)
-              .fontColor(getTheme(this.isDark).textSecondary)
-
-            Row({ space: 8 }) {
-              Button('首页')
+              Button('关闭')
                 .fontSize(13)
                 .height(34)
-                .layoutWeight(1)
-                .backgroundColor(getTheme(this.isDark).accentBg)
-                .fontColor(getTheme(this.isDark).accent)
+                .width('100%')
+                .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                .fontColor(getTheme(this.isDark).textSecondary)
                 .onClick(() => {
-                  this.jumpToPage(1);
+                  this.showFavoriteModal = false;
                 })
-              if (!this.onlyAuthor && this.totalPages > 1) {
-                Button(`末页 (${this.totalPages})`)
+            }
+            .width('88%')
+            .padding(16)
+            .backgroundColor(getTheme(this.isDark).cardBg)
+            .borderRadius(14)
+            .alignItems(HorizontalAlign.Start)
+            .onClick(() => {
+            })
+          }
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#80000000')
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.showFavoriteModal = false;
+          })
+        }
+
+        if (this.showJumpModal) {
+          Column() {
+            Column({ space: 12 }) {
+              Text('快速跳页')
+                .fontSize(16)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(getTheme(this.isDark).textPrimary)
+              Text(
+                this.onlyAuthor
+                  ? `当前仅看作者第 ${this.page} 页`
+                  : `当前第 ${this.page} 页，共 ${this.totalPages} 页`
+              )
+                .fontSize(12)
+                .fontColor(getTheme(this.isDark).textSecondary)
+
+              Row({ space: 8 }) {
+                Button('首页')
                   .fontSize(13)
                   .height(34)
                   .layoutWeight(1)
                   .backgroundColor(getTheme(this.isDark).accentBg)
                   .fontColor(getTheme(this.isDark).accent)
                   .onClick(() => {
-                    this.jumpToPage(this.totalPages);
+                    this.jumpToPage(1);
+                  })
+                if (!this.onlyAuthor && this.totalPages > 1) {
+                  Button(`末页 (${this.totalPages})`)
+                    .fontSize(13)
+                    .height(34)
+                    .layoutWeight(1)
+                    .backgroundColor(getTheme(this.isDark).accentBg)
+                    .fontColor(getTheme(this.isDark).accent)
+                    .onClick(() => {
+                      this.jumpToPage(this.totalPages);
+                    })
+                }
+              }
+              .width('100%')
+
+              Row({ space: 8 }) {
+                TextInput({
+                  placeholder: this.onlyAuthor ? '输入目标页码' : `1 - ${this.totalPages}`,
+                  text: this.jumpInput
+                })
+                  .type(InputType.Number)
+                  .height(38)
+                  .fontSize(14)
+                  .fontColor(getTheme(this.isDark).textPrimary)
+                  .placeholderColor(getTheme(this.isDark).textMuted)
+                  .backgroundColor(getTheme(this.isDark).inputBg)
+                  .layoutWeight(1)
+                  .onChange((value: string) => {
+                    this.jumpInput = value;
+                  })
+                  .onSubmit(() => {
+                    this.submitJumpInput();
+                  })
+                Button('跳转')
+                  .fontSize(13)
+                  .height(38)
+                  .backgroundColor(getTheme(this.isDark).accentSolid)
+                  .fontColor(Color.White)
+                  .onClick(() => {
+                    this.submitJumpInput();
                   })
               }
-            }
-            .width('100%')
-
-            Row({ space: 8 }) {
-              TextInput({
-                placeholder: this.onlyAuthor ? '输入目标页码' : `1 - ${this.totalPages}`,
-                text: this.jumpInput
-              })
-                .type(InputType.Number)
-                .height(38)
-                .fontSize(14)
-                .fontColor(getTheme(this.isDark).textPrimary)
-                .placeholderColor(getTheme(this.isDark).textMuted)
-                .backgroundColor(getTheme(this.isDark).inputBg)
-                .layoutWeight(1)
-                .onChange((value: string) => {
-                  this.jumpInput = value;
-                })
-                .onSubmit(() => {
-                  this.submitJumpInput();
-                })
-              Button('跳转')
-                .fontSize(13)
-                .height(38)
-                .backgroundColor(getTheme(this.isDark).accentSolid)
-                .fontColor(Color.White)
-                .onClick(() => {
-                  this.submitJumpInput();
-                })
-            }
-            .width('100%')
-
-            Button('取消')
-              .fontSize(13)
-              .height(34)
               .width('100%')
-              .backgroundColor(getTheme(this.isDark).surfaceMuted)
-              .fontColor(getTheme(this.isDark).textSecondary)
-              .onClick(() => {
-                this.showJumpModal = false;
-              })
-          }
-          .width('86%')
-          .padding(16)
-          .backgroundColor(getTheme(this.isDark).cardBg)
-          .borderRadius(14)
-          .alignItems(HorizontalAlign.Start)
-          .onClick(() => {
-          })
-        }
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#80000000')
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.showJumpModal = false;
-        })
-      }
 
-      if (this.activeLinkUrl.length > 0) {
-        Column() {
-          Column({ space: 12 }) {
-            Text('帖子链接')
-              .fontSize(16)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(getTheme(this.isDark).textPrimary)
-            Text(this.activeLinkUrl)
-              .fontSize(13)
-              .fontColor(getTheme(this.isDark).textSecondary)
-              .lineHeight(20)
-              .width('100%')
-            Row({ space: 10 }) {
-              Button('关闭')
+              Button('取消')
                 .fontSize(13)
-                .height(36)
-                .layoutWeight(1)
+                .height(34)
+                .width('100%')
                 .backgroundColor(getTheme(this.isDark).surfaceMuted)
                 .fontColor(getTheme(this.isDark).textSecondary)
                 .onClick(() => {
-                  this.activeLinkUrl = '';
-                })
-              Button('复制链接')
-                .fontSize(13)
-                .height(36)
-                .layoutWeight(1)
-                .backgroundColor(getTheme(this.isDark).accentSolid)
-                .fontColor(Color.White)
-                .onClick(() => {
-                  this.copyActiveLink();
+                  this.showJumpModal = false;
                 })
             }
-            .width('100%')
-          }
-          .width('86%')
-          .padding(16)
-          .backgroundColor(getTheme(this.isDark).cardBg)
-          .borderRadius(14)
-          .alignItems(HorizontalAlign.Start)
-          .onClick(() => {
-          })
-        }
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#80000000')
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.activeLinkUrl = '';
-        })
-      }
-
-      if (this.previewImageUrl.length > 0) {
-        Column() {
-          Row() {
-            Blank()
-            Button('关闭')
-              .fontSize(13)
-              .height(32)
-              .backgroundColor('#33FFFFFF')
-              .fontColor(Color.White)
-              .onClick(() => {
-                this.previewImageUrl = '';
-              })
+            .width('86%')
+            .padding(16)
+            .backgroundColor(getTheme(this.isDark).cardBg)
+            .borderRadius(14)
+            .alignItems(HorizontalAlign.Start)
+            .onClick(() => {
+            })
           }
           .width('100%')
-          .padding({ left: 16, right: 16, top: 12, bottom: 8 })
-
-          Image(this.previewImageUrl)
-            .width('100%')
-            .layoutWeight(1)
-            .objectFit(ImageFit.Contain)
-            .padding({ left: 12, right: 12, bottom: 24 })
+          .height('100%')
+          .backgroundColor('#80000000')
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.showJumpModal = false;
+          })
         }
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#E6000000')
-        .onClick(() => {
-          this.previewImageUrl = '';
-        })
+
+        if (this.activeLinkUrl.length > 0) {
+          Column() {
+            Column({ space: 12 }) {
+              Text(
+                parseLkongUrl(this.activeLinkUrl).kind !== LkongLinkKind.NONE
+                  ? '龙空站内链接'
+                  : '帖子链接'
+              )
+                .fontSize(16)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(getTheme(this.isDark).textPrimary)
+              Text(this.activeLinkUrl)
+                .fontSize(13)
+                .fontColor(getTheme(this.isDark).textSecondary)
+                .lineHeight(20)
+                .width('100%')
+              Row({ space: 8 }) {
+                Button('关闭')
+                  .fontSize(13)
+                  .height(36)
+                  .layoutWeight(1)
+                  .backgroundColor(getTheme(this.isDark).surfaceMuted)
+                  .fontColor(getTheme(this.isDark).textSecondary)
+                  .onClick(() => {
+                    this.activeLinkUrl = '';
+                  })
+                Button('复制链接')
+                  .fontSize(13)
+                  .height(36)
+                  .layoutWeight(1)
+                  .backgroundColor(
+                    parseLkongUrl(this.activeLinkUrl).kind !== LkongLinkKind.NONE
+                      ? getTheme(this.isDark).accentBg
+                      : getTheme(this.isDark).accentSolid
+                  )
+                  .fontColor(
+                    parseLkongUrl(this.activeLinkUrl).kind !== LkongLinkKind.NONE
+                      ? getTheme(this.isDark).accent
+                      : Color.White
+                  )
+                  .onClick(() => {
+                    this.copyActiveLink();
+                  })
+                if (parseLkongUrl(this.activeLinkUrl).kind !== LkongLinkKind.NONE) {
+                  Button('应用内打开')
+                    .fontSize(13)
+                    .height(36)
+                    .layoutWeight(1)
+                    .backgroundColor(getTheme(this.isDark).accentSolid)
+                    .fontColor(Color.White)
+                    .onClick(() => {
+                      this.openActiveLkongLink();
+                    })
+                }
+              }
+              .width('100%')
+            }
+            .width('86%')
+            .padding(16)
+            .backgroundColor(getTheme(this.isDark).cardBg)
+            .borderRadius(14)
+            .alignItems(HorizontalAlign.Start)
+            .onClick(() => {
+            })
+          }
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#80000000')
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.activeLinkUrl = '';
+          })
+        }
+
+        if (this.showImageViewer) {
+          ImageViewerOverlay({
+            images: this.previewImages,
+            initialIndex: this.previewIndex,
+            onClose: () => {
+              this.showImageViewer = false;
+            }
+          })
+        }
       }
+      .width('100%')
+      .height('100%')
     }
-    .width('100%')
-    .height('100%')
+    .hideTitleBar(true)
+    .onReady((ctx: NavDestinationContext) => {
+      if (this.readyHandled) {
+        return;
+      }
+      this.readyHandled = true;
+      const params = ctx.pathInfo.param as ThreadRouteParams | undefined | null;
+      if (params !== undefined && params !== null) {
+        this.tid = params.tid === undefined ? 0 : params.tid;
+        this.fallbackTitle = params.title === undefined ? '' : params.title;
+        const paramPid = params.pid === undefined ? '' : params.pid;
+        this.pendingScrollPid = paramPid;
+        this.highlightPid = paramPid;
+      }
+      const existingSeq = AppStorage.get<number>(KEY_THREAD_REFRESH_SEQ);
+      this.lastRefreshSeq = existingSeq === undefined ? 0 : existingSeq;
+      this.bootstrap();
+    })
+    .onShown(() => {
+      if (!this.bootstrapped) {
+        return;
+      }
+      this.syncCurrentUserId();
+      const seq = AppStorage.get<number>(KEY_THREAD_REFRESH_SEQ);
+      const refreshTid = AppStorage.get<number>(KEY_THREAD_REFRESH_TID);
+      if (seq !== undefined && seq > this.lastRefreshSeq && refreshTid === this.tid && this.tid > 0) {
+        this.lastRefreshSeq = seq;
+        this.onlyAuthor = false;
+        const refreshPid = AppStorage.get<string>(KEY_THREAD_REFRESH_PID);
+        const refreshLou = AppStorage.get<number>(KEY_THREAD_REFRESH_LOU);
+        if (refreshPid !== undefined && refreshPid.length > 0) {
+          this.pendingScrollPid = refreshPid;
+          this.highlightPid = refreshPid;
+        } else if (refreshLou !== undefined && refreshLou > 0) {
+          this.page = Math.max(1, Math.ceil(refreshLou / POSTS_PER_PAGE));
+        }
+        this.loadPage();
+        return;
+      }
+      if (this.needLogin && CookieStore.getInstance().hasCookie()) {
+        this.loadPage();
+      }
+    })
+    .onBackPressed(() => {
+      if (this.showImageViewer) {
+        this.showImageViewer = false;
+        return true;
+      }
+      if (this.activeLinkUrl.length > 0) {
+        this.activeLinkUrl = '';
+        return true;
+      }
+      if (this.showRateModal) {
+        this.showRateModal = false;
+        return true;
+      }
+      if (this.showFavoriteModal) {
+        this.showFavoriteModal = false;
+        return true;
+      }
+      if (this.showJumpModal) {
+        this.showJumpModal = false;
+        return true;
+      }
+      if (this.showFontBar) {
+        this.showFontBar = false;
+        return true;
+      }
+      return false;
+    })
   }
 }

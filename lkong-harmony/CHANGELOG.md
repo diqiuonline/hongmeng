@@ -6,7 +6,53 @@
 
 ## 版本变更记录
 
-### [1.3.0] - 2026-11-24
+### [1.5.0] - 2026-11-28
+
+#### 新增（Added）
+- **全站多 Tab 原生左右滑动切换**：
+  - 首页 `Index.ets`（`版块 ↔ 热帖 ↔ 常用 ↔ 我的`）、版块页 `ForumPage.ets`（`全部 ↔ 热门 ↔ 最新 ↔ 精华`）、个人主页 `UserProfilePage.ets`（`主题 ↔ 帖子 ↔ 精华 ↔ 收藏夹`）与消息通知页 `NotificationsPage.ets`（`通知 ↔ @我 ↔ 评分 ↔ 粉丝 ↔ 私信`）全部接入原生 `Tabs` + `TabsController` 手势滑动切换，并保留原有导航与未读角标外观。
+  - 首页处于版块「排序编辑模式」时自动锁定横向滑动（`.scrollable(!this.forumEditMode)`），防止拖拽点按时误切页面。
+- **版块页新增「热门」Tab（今日热门）**：
+  - 新增 `ViewForumHotThreads` 查询（`threadsFragment(fid: $fid, type: "hot")`）与 `LkongApi.getForumHotThreads(fid)`。
+  - `ForumPage.ets` 扩展并调整为「全部 / 热门 / 最新 / 精华」4 个独立缓存状态 Tab，支持首次切入懒加载、下拉刷新、排名高亮与作者/帖子直达。
+- **每日自动签到（`PunchPrefs`）**：
+  - 新增 `store/PunchPrefs.ets` 持久化开关（默认开启）、最近签到日期、UID 与执行记录，配合 `EntryAbility.onForeground` 前台事件序号实现冷启动与隔夜切回前台自动检查并签到，含单日防重与换号重置机制。
+  - `SettingsPage.ets` 新增「每日自动签到」开关与最近记录展示；`Index.ets` 签到卡片新增「自动」快捷徽标，清除登录态时自动清理签到运行记录。
+- **个人主页新增「帖子」与「精华」Tab 及帖子详情展开**：
+  - 新增 `UserPostItem` 模型、`MIX_POST_COMPONENT_FRAGMENT`、`ViewUserContentsPage`（`userReplies` + `isDigest`）与 `parseUserPosts`，完整覆盖 `MajorPost` / `MajorReply` / `MinorPost` / `MajorBookReview` / `MajorBookReviewReply`。
+  - `UserProfilePage.ets` 新增 `帖子` 与 `精华` 分页列表，支持点击顶部统计数字（`主题` / `回复` / `精华`）快捷切 Tab、嵌套吸顶滑动、卡片内一键「展开详情 / 收起详情」（直接复用 `PostCard` 渲染富文本、表情、自适应图片与引用块，支持 `ImageViewerOverlay` 看大图与内链跳转），以及点击直达原帖精准高亮定位目标楼层 `pid`。
+
+#### 变更（Changed）
+- 升级 `AppScope/app.json5` 至 `1.5.0`（`versionCode: 1005000`），同步更新 `AppConfig.APP_VERSION` 为 `'1.5.0'`，同步更新 `Index.ets`「个人主页与帖子」入口文案、`README.md` 与 `CHANGELOG.md`。
+
+---
+
+### [1.4.0] - 2026-11-24
+
+#### 新增（Added）
+- **全屏多图看图器与免权限保存相册（`ImageViewerOverlay` & `ImageSaveUtils`）**：
+  - 新增 `components/ImageViewerOverlay.ets`、`utils/ImageSaveUtils.ets` 与 `HttpClient.downloadImage`（严格限制 `images.lkong.com` / `image.lkong.com` 白名单且不携带 Cookie）。
+  - 帖子详情页与编辑预览点击图片可按楼层顺序定位进入全屏 `Swiper` 左右滑切图，支持双指捏合缩放（`1x ~ 4x`）、双击放大/复位、放大拖移及系统安全控件 `SaveButton` 免存储写权限保存原图与 GIF 动图到相册。
+- **站内私信（PM）会话与聊天页（`MessageChatPage`）**：
+  - `NotificationsPage` 新增第 5 个「私信」Tab（`ViewLastUsersMessages` / `DelUserMessage`），并把 `pmCount` 计入首页「我的」Tab 与顶栏未读角标汇总。
+  - 新增 `pages/MessageChatPage.ets`，接入 `ViewUserMessages`、`SendMessage`、`SendImageMessage` 与 `DelMessage`，支持历史消息上拉加载、收发文本/图片私信及单条消息删除。
+- **编辑自己的帖子/回复、版块筛选与用户关注**：
+  - `PostCard` 为本人未锁帖楼层展示「编辑」入口，`ComposePage` 新增 `mode='edit'`（接入 `BasePost` 与 `EditPost`），自动将 Slate JSON/HTML 还原为可编辑正文、`[em{id}]` 表情与附件图片并支持保存更新。
+  - `ForumPage` 新增「全部 / 精选 / 最新」筛选（透传 `ViewForumPage` `$action`），`UserProfilePage` 与 `NotificationsPage` 粉丝列表接入 `FollowUser` 关注/回关及私信入口。
+- **二次验证（`twoWay`）登录与阅读/网络体验优化**：
+  - 修正 `LoginResult.twoWay` 为字符串 token，接入 `TwoWayLogin`（`twoWaylogin`）动态验证码输入与会话提取。
+  - 新增 `utils/LkongLinkUtils.ets`，帖子内 `lkong.com` 帖子/版块/用户链接弹窗支持「应用内打开」直达；`Index`、`ForumPage`、`ThreadPage`、`NotificationsPage` 补充原生 `Refresh` 下拉刷新，`ThreadPage` 补充悬浮「顶部」按钮。
+  - `HttpClient.waitForSlot()` 升级为 Promise 链式串行排队锁，彻底消除并发调用越过 800ms 间隔的竞态。
+
+#### 变更（Changed）
+- **全面迁移至 `Navigation + NavPathStack` 与 `UIContext`（API 26 零废弃告警）**：
+  - 新增 `utils/AppRouter.ets` 与 `utils/UiUtils.ets`，`Index.ets` 升级为 `Navigation` 根容器，其余子页面全部转为 `NavDestination` 组件，`main_pages.json` 收敛为仅保留 `pages/Index`。
+  - 全部页面迁移至 `this.getUIContext().getPromptAction()` 与 `this.getUIContext().getHostContext()`，清零工程内所有 `router`、`promptAction` 与 `getContext` 废弃 API 调用。
+- 升级 `AppScope/app.json5` 至 `1.4.0`（`versionCode: 1004000`），同步更新 `AppConfig.APP_VERSION` 为 `'1.4.0'`，同步更新 `SettingsPage.ets`、`README.md` 与 `CHANGELOG.md`。
+
+---
+
+### [1.3.0] - 2026-11-24（已实装）
 
 #### 新增（Added）
 - **统一发帖 / 回帖 / 引用回复页（`ComposePage`）与仅本机草稿**：
@@ -139,8 +185,9 @@
 | **v1.0.2** | 2026-11-21 | 已内测发版 | 首页每日签到、楼层图文混排、UUID `pid` 与删楼翻页修复 |
 | **v1.1.0** | 2026-11-22 ~ 2026-11-24 | 已内测发版（已部署真机） | 只看作者、快速跳页、富文本样式与链接复制、深色模式与字号调节 |
 | **v1.2.0** | 2026-11-23 | 已实装 | 首页底部 4 TabBar（版块/热帖/常用/我的）、版块置顶与自定义排序、搜索、纯云端收藏夹、个人资料页、引用楼层展示 |
-| **v1.3.0** | 2026-11-24 | 代码已开发待真机验证 | 统一 `ComposePage` 发新帖/回帖/引用回复、官方表情面板与相册传图、楼层龙币评分（展示+提交）、站内消息通知与未读红点、`pid` 楼层定位高亮 |
-| **v1.4.0** | 2026-12-21 ~ 2026-12-31 | 看图增强与技术债清理 | 大图缩放/多图切换/保存相册、私信与 `twoWay` 调研、迁移废弃系统 API |
+| **v1.3.0** | 2026-11-24 | 已实装 | 统一 `ComposePage` 发新帖/回帖/引用回复、官方表情面板与相册传图、楼层龙币评分（展示+提交）、站内消息通知与未读红点、`pid` 楼层定位高亮 |
+| **v1.4.0** | 2026-11-24 | 已实装（已部署真机） | 多图看图缩放与 `SaveButton` 保存相册、私信会话与聊天、楼层编辑、版块筛选、关注与 `twoWay` 二次验证、`Navigation` + `UIContext` 零废弃告警迁移 |
+| **v1.5.0** | 2026-11-28 | 代码已开发待真机验证 | 多 Tab 左右滑动切换、版块「热帖」今日热门 Tab、每日自动签到、个人主页「帖子」与「精华」详情展开及楼层直达 |
 
 ---
 
@@ -161,7 +208,7 @@
 - **楼层龙币评分**：在 `PostCard` 展示已有评分汇总与明细，并通过 `Rate` mutation 提交龙币评分。
 - **站内消息通知中心与楼层定位**：新增 `NotificationsPage` 与首页未读红点角标（通知 / `@我` / 评分 / 粉丝），并支持 `pid` 精确定位与高亮目标楼层。
 
-#### 3. v1.4.0 — 看图增强与技术债清理（2026-12-21 ~ 2026-12-31）
-- **看图体验升级**（原参考 `lkongdroid` `PhotoViewPagerActivity`，目录已删除）：全屏图片预览支持双指捏合缩放、左右滑动切换同帖多图、保存图片到系统相册。
-- **私信与二次验证调研**：评估 GraphQL 私信列表/收发及 `twoWay` 二次验证账号登录流程的可行性。
-- **HarmonyOS SDK 废弃 API 迁移**：将编译告警中提示的旧版 `router.pushUrl/back/getParams`、`getContext`、`promptAction.showToast` 逐步迁移至官方推荐的 `Navigation` 与 `this.getUIContext()` 接口，消除编译期警告。
+#### 3. v1.4.0 — 看图增强、完整互动与架构清理（2026-11-24，代码已开发待真机验证）
+- **看图体验升级**：新增 `ImageViewerOverlay` 与 `ImageSaveUtils`，支持同页多图 `Swiper` 左右切换、双指捏合缩放、双击放大/复位及 `SaveButton` 免写权限保存原图与 GIF 至系统相册。
+- **私信、楼层编辑、筛选、关注与二次验证**：打通 `MessageChatPage` 站内私信收发/删消息、`ComposePage` 编辑已有楼层、`ForumPage` 全部/精选/最新筛选、`FollowUser` 关注/回关及 `TwoWayLogin` 二次验证。
+- **HarmonyOS SDK 废弃 API 清零与体验增强**：全面重构为 `Navigation + NavPathStack` + `UIContext`，消除所有旧版 `router`、`promptAction`、`getContext` 告警；补充站内链接应用内打开、原生下拉刷新、帖子回顶与严格串行请求排队。

@@ -1,28 +1,27 @@
-import { promptAction, router } from '@kit.ArkUI';
-import { common } from '@kit.AbilityKit';
 import { ApiError, ErrorKind, FavoriteEntry, FavoriteGroup } from '../model/Models';
 import { LkongApi } from '../network/LkongApi';
 import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
 import { StateView } from '../components/StateView';
+import {
+  AppNavigator,
+  FavoriteDetailRouteParams,
+  Routes,
+  ThreadRouteParams,
+  UserProfileRouteParams
+} from '../utils/AppRouter';
 import { renderPostSummary } from '../utils/ContentUtils';
 import { formatTime } from '../utils/TimeUtils';
 import { getTheme, KEY_IS_DARK } from '../utils/Theme';
+import { getHostContext, showToast } from '../utils/UiUtils';
 
 const ITEMS_PER_PAGE: number = 20;
-
-interface FavoriteDetailParams {
-  groupId: number;
-  title?: string;
-  isMine?: boolean;
-}
 
 /**
  * 云端收藏夹分组明细页：分页浏览收藏条目，支持直达帖子/作者以及在本人收藏夹内取消收藏。
  */
-@Entry
 @Component
-struct FavoriteDetailPage {
+export struct FavoriteDetailPage {
   @State groupId: number = 0;
   @State fallbackTitle: string = '';
   @State isMineParam: boolean = false;
@@ -37,37 +36,15 @@ struct FavoriteDetailPage {
   @State removingPid: string = '';
 
   @StorageProp(KEY_IS_DARK) isDark: boolean = false;
-
-  aboutToAppear(): void {
-    const raw = router.getParams();
-    if (raw !== undefined && raw !== null) {
-      const params = raw as FavoriteDetailParams;
-      this.groupId = params.groupId === undefined ? 0 : params.groupId;
-      this.fallbackTitle = params.title === undefined ? '' : params.title;
-      this.isMineParam = params.isMine === undefined ? false : params.isMine;
-    }
-    this.bootstrap();
-  }
-
-  onPageShow(): void {
-    if (this.needLogin && CookieStore.getInstance().hasCookie()) {
-      this.loadDetail();
-    }
-  }
+  private readyHandled: boolean = false;
+  private bootstrapped: boolean = false;
 
   private async bootstrap(): Promise<void> {
-    const ctx = getContext(this) as common.Context;
+    const ctx = getHostContext(this.getUIContext());
     await CookieStore.getInstance().ensureInit(ctx);
     await DisplayPrefs.getInstance().ensureInit(ctx);
+    this.bootstrapped = true;
     await this.loadDetail();
-  }
-
-  private showToast(message: string): void {
-    try {
-      promptAction.showToast({ message: message });
-    } catch (error) {
-      // 忽略页面退出等场景下的弹窗异常。
-    }
   }
 
   private async loadDetail(): Promise<void> {
@@ -152,51 +129,44 @@ struct FavoriteDetailPage {
             dateline: this.group.dateline
           };
         }
-        this.showToast('已取消收藏');
+        showToast(this.getUIContext(), '已取消收藏');
       } else {
-        this.showToast('取消收藏未生效，请重试');
+        showToast(this.getUIContext(), '取消收藏未生效，请重试');
       }
     } catch (error) {
       const message = error instanceof ApiError ? error.message : '取消收藏失败，请稍后重试。';
-      this.showToast(message);
+      showToast(this.getUIContext(), message);
     } finally {
       this.removingPid = '';
     }
   }
 
   private goLogin(): void {
-    router.pushUrl({ url: 'pages/LoginPage' }).catch(() => {
-    });
+    AppNavigator.getInstance().push(Routes.LOGIN);
   }
 
   private openThread(item: FavoriteEntry): void {
     if (item.tid <= 0) {
-      this.showToast('该条收藏暂无可跳转的主题');
+      showToast(this.getUIContext(), '该条收藏暂无可跳转的主题');
       return;
     }
-    router.pushUrl({
-      url: 'pages/ThreadPage',
-      params: {
-        tid: item.tid,
-        title: item.title,
-        pid: item.pid
-      }
-    }).catch(() => {
-    });
+    const params: ThreadRouteParams = {
+      tid: item.tid,
+      title: item.title,
+      pid: item.pid
+    };
+    AppNavigator.getInstance().push(Routes.THREAD, params);
   }
 
   private openUserProfile(uid: number, name: string): void {
     if (uid <= 0) {
       return;
     }
-    router.pushUrl({
-      url: 'pages/UserProfilePage',
-      params: {
-        uid: uid,
-        name: name
-      }
-    }).catch(() => {
-    });
+    const params: UserProfileRouteParams = {
+      uid: uid,
+      name: name
+    };
+    AppNavigator.getInstance().push(Routes.USER_PROFILE, params);
   }
 
   private previousPage(): void {
@@ -214,16 +184,17 @@ struct FavoriteDetailPage {
   }
 
   build() {
-    Column() {
-      Row({ space: 8 }) {
-        Button('返回')
-          .fontSize(12)
-          .height(32)
-          .backgroundColor(getTheme(this.isDark).accentBg)
-          .fontColor(getTheme(this.isDark).accent)
-          .onClick(() => {
-            router.back();
-          })
+    NavDestination() {
+      Column() {
+        Row({ space: 8 }) {
+          Button('返回')
+            .fontSize(12)
+            .height(32)
+            .backgroundColor(getTheme(this.isDark).accentBg)
+            .fontColor(getTheme(this.isDark).accent)
+            .onClick(() => {
+              AppNavigator.getInstance().pop();
+            })
         Text(this.displayTitle())
           .fontSize(17)
           .fontWeight(FontWeight.Bold)
@@ -448,5 +419,28 @@ struct FavoriteDetailPage {
     .width('100%')
     .height('100%')
     .backgroundColor(getTheme(this.isDark).pageBg)
+    }
+    .hideTitleBar(true)
+    .onReady((ctx: NavDestinationContext) => {
+      if (this.readyHandled) {
+        return;
+      }
+      this.readyHandled = true;
+      const params = ctx.pathInfo.param as FavoriteDetailRouteParams | undefined | null;
+      if (params !== undefined && params !== null) {
+        this.groupId = params.groupId === undefined ? 0 : params.groupId;
+        this.fallbackTitle = params.title === undefined ? '' : params.title;
+        this.isMineParam = params.isMine === undefined ? false : params.isMine;
+      }
+      this.bootstrap();
+    })
+    .onShown(() => {
+      if (!this.bootstrapped) {
+        return;
+      }
+      if (this.needLogin && CookieStore.getInstance().hasCookie()) {
+        this.loadDetail();
+      }
+    })
   }
 }

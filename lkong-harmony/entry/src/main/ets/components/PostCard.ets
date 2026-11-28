@@ -31,8 +31,11 @@ export struct PostCard {
   @Prop @Watch('onRatesChange') rates: PostRateItem[] = [];
   @Prop isHighlighted: boolean = false;
   @Prop canReply: boolean = true;
+  @Prop canEdit: boolean = false;
   @Prop canRate: boolean = true;
   @Prop canFavorite: boolean = true;
+  @Prop showHeader: boolean = true;
+  @Prop embedded: boolean = false;
   onImageClick: (url: string) => void = () => {
   };
   onLinkClick: (url: string) => void = () => {
@@ -42,6 +45,8 @@ export struct PostCard {
   onFavoriteClick: (pid: string, floor: string) => void = () => {
   };
   onReplyClick: (pid: string, floor: string, authorName: string, summary: string) => void = () => {
+  };
+  onEditClick: (pid: string, floor: string) => void = () => {
   };
   onRateClick: (pid: string, floor: string, authorName: string) => void = () => {
   };
@@ -168,37 +173,39 @@ export struct PostCard {
 
   build() {
     Column({ space: 8 }) {
-      Row({ space: 8 }) {
-        Text(this.floor.length > 0 ? `${this.floor} 楼` : '楼主')
-          .fontSize(12)
-          .fontColor(getTheme(this.isDark).accent)
-        Text(this.authorName.length > 0 ? this.authorName : '匿名用户')
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(
-            this.authorId > 0 ? getTheme(this.isDark).accent : getTheme(this.isDark).textPrimary
-          )
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-          .onClick(() => {
-            if (this.authorId > 0) {
-              this.onAuthorClick(this.authorId, this.authorName);
-            }
-          })
-        if (this.isAuthor) {
-          Text('作者')
-            .fontSize(10)
-            .fontColor(Color.White)
-            .backgroundColor(getTheme(this.isDark).accentSolid)
-            .borderRadius(3)
-            .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+      if (this.showHeader) {
+        Row({ space: 8 }) {
+          Text(this.floor.length > 0 ? `${this.floor} 楼` : '楼主')
+            .fontSize(12)
+            .fontColor(getTheme(this.isDark).accent)
+          Text(this.authorName.length > 0 ? this.authorName : '匿名用户')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(
+              this.authorId > 0 ? getTheme(this.isDark).accent : getTheme(this.isDark).textPrimary
+            )
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+            .onClick(() => {
+              if (this.authorId > 0) {
+                this.onAuthorClick(this.authorId, this.authorName);
+              }
+            })
+          if (this.isAuthor) {
+            Text('作者')
+              .fontSize(10)
+              .fontColor(Color.White)
+              .backgroundColor(getTheme(this.isDark).accentSolid)
+              .borderRadius(3)
+              .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+          }
+          Text(this.postTime)
+            .fontSize(12)
+            .fontColor(getTheme(this.isDark).textMuted)
         }
-        Text(this.postTime)
-          .fontSize(12)
-          .fontColor(getTheme(this.isDark).textMuted)
+        .width('100%')
       }
-      .width('100%')
 
       if (this.hasQuote()) {
         Column({ space: 4 }) {
@@ -405,9 +412,20 @@ export struct PostCard {
         .alignItems(HorizontalAlign.Start)
       }
 
-      if (this.pid.length > 0 && (this.canReply || this.canRate || this.canFavorite)) {
+      if (this.pid.length > 0 && (this.canReply || this.canEdit || this.canRate || this.canFavorite)) {
         Row({ space: 8 }) {
           Blank()
+          if (this.canEdit) {
+            Text('编辑')
+              .fontSize(11)
+              .fontColor(getTheme(this.isDark).textPrimary)
+              .backgroundColor(getTheme(this.isDark).surfaceMuted)
+              .borderRadius(4)
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .onClick(() => {
+                this.onEditClick(this.pid, this.floor);
+              })
+          }
           if (this.canReply) {
             Text('回复')
               .fontSize(11)
@@ -447,14 +465,14 @@ export struct PostCard {
       }
     }
     .width('100%')
-    .padding(14)
-    .backgroundColor(getTheme(this.isDark).cardBg)
+    .padding(this.embedded ? 0 : 14)
+    .backgroundColor(this.embedded ? Color.Transparent : getTheme(this.isDark).cardBg)
     .border(
       this.isHighlighted
         ? { width: 1.5, color: getTheme(this.isDark).accent }
         : { width: 0, color: Color.Transparent }
     )
-    .borderRadius(12)
+    .borderRadius(this.embedded ? 0 : 12)
     .alignItems(HorizontalAlign.Start)
   }
 }

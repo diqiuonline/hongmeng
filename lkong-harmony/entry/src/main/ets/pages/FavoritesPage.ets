@@ -1,19 +1,18 @@
-import { promptAction, router } from '@kit.ArkUI';
-import { common } from '@kit.AbilityKit';
 import { ApiError, ErrorKind, FavoriteGroup } from '../model/Models';
 import { LkongApi } from '../network/LkongApi';
 import { CookieStore } from '../store/CookieStore';
 import { DisplayPrefs } from '../store/DisplayPrefs';
 import { StateView } from '../components/StateView';
+import { AppNavigator, FavoriteDetailRouteParams, Routes } from '../utils/AppRouter';
 import { formatTime } from '../utils/TimeUtils';
 import { getTheme, KEY_IS_DARK } from '../utils/Theme';
+import { getHostContext, showToast } from '../utils/UiUtils';
 
 /**
  * 纯云端收藏夹分组列表与管理页（新建、编辑、删除分组）。
  */
-@Entry
 @Component
-struct FavoritesPage {
+export struct FavoritesPage {
   @State groups: FavoriteGroup[] = [];
   @State loading: boolean = true;
   @State errorMessage: string = '';
@@ -32,42 +31,16 @@ struct FavoritesPage {
   @StorageProp(KEY_IS_DARK) isDark: boolean = false;
   private hasLoadedOnce: boolean = false;
 
-  onBackPress(): boolean {
-    if (this.deleteTarget !== null) {
-      this.deleteTarget = null;
-      return true;
-    }
-    if (this.showGroupModal) {
-      this.showGroupModal = false;
-      return true;
-    }
-    return false;
-  }
-
   aboutToAppear(): void {
     this.bootstrap();
   }
 
-  onPageShow(): void {
-    if (this.hasLoadedOnce && CookieStore.getInstance().hasCookie() && !this.loading) {
-      this.loadGroups();
-    }
-  }
-
   private async bootstrap(): Promise<void> {
-    const ctx = getContext(this) as common.Context;
+    const ctx = getHostContext(this.getUIContext());
     await CookieStore.getInstance().ensureInit(ctx);
     await DisplayPrefs.getInstance().ensureInit(ctx);
     await this.loadGroups();
     this.hasLoadedOnce = true;
-  }
-
-  private showToast(message: string): void {
-    try {
-      promptAction.showToast({ message: message });
-    } catch (error) {
-      // 忽略页面退出等场景下的弹窗异常。
-    }
   }
 
   private async loadGroups(): Promise<void> {
@@ -91,25 +64,21 @@ struct FavoritesPage {
   }
 
   private goLogin(): void {
-    router.pushUrl({ url: 'pages/LoginPage' }).catch(() => {
-    });
+    AppNavigator.getInstance().push(Routes.LOGIN);
   }
 
   private openDetail(group: FavoriteGroup): void {
-    router.pushUrl({
-      url: 'pages/FavoriteDetailPage',
-      params: {
-        groupId: group.id,
-        title: group.title,
-        isMine: true
-      }
-    }).catch(() => {
-    });
+    const params: FavoriteDetailRouteParams = {
+      groupId: group.id,
+      title: group.title,
+      isMine: true
+    };
+    AppNavigator.getInstance().push(Routes.FAVORITE_DETAIL, params);
   }
 
   private openCreateModal(): void {
     if (!CookieStore.getInstance().hasCookie()) {
-      this.showToast('请先登录');
+      showToast(this.getUIContext(), '请先登录');
       this.goLogin();
       return;
     }
@@ -131,7 +100,7 @@ struct FavoritesPage {
   private async submitGroupForm(): Promise<void> {
     const title = this.formTitle.trim();
     if (title.length === 0) {
-      this.showToast('请输入收藏夹名称');
+      showToast(this.getUIContext(), '请输入收藏夹名称');
       return;
     }
     if (this.submitting) {
@@ -141,7 +110,7 @@ struct FavoritesPage {
     try {
       if (this.editingGroupId === 0) {
         await LkongApi.getInstance().createFavoriteGroup(title, this.formDesc.trim(), this.formPublic);
-        this.showToast('收藏夹已创建');
+        showToast(this.getUIContext(), '收藏夹已创建');
       } else {
         await LkongApi.getInstance().editFavoriteGroup(
           this.editingGroupId,
@@ -149,13 +118,13 @@ struct FavoritesPage {
           this.formDesc.trim(),
           this.formPublic
         );
-        this.showToast('收藏夹已更新');
+        showToast(this.getUIContext(), '收藏夹已更新');
       }
       this.showGroupModal = false;
       await this.loadGroups();
     } catch (error) {
       const message = error instanceof ApiError ? error.message : '操作失败，请稍后重试。';
-      this.showToast(message);
+      showToast(this.getUIContext(), message);
     } finally {
       this.submitting = false;
     }
@@ -170,28 +139,29 @@ struct FavoritesPage {
     try {
       await LkongApi.getInstance().deleteFavoriteGroup(targetId);
       this.deleteTarget = null;
-      this.showToast('收藏夹已删除');
+      showToast(this.getUIContext(), '收藏夹已删除');
       await this.loadGroups();
     } catch (error) {
       const message = error instanceof ApiError ? error.message : '删除失败，请稍后重试。';
-      this.showToast(message);
+      showToast(this.getUIContext(), message);
     } finally {
       this.deleting = false;
     }
   }
 
   build() {
-    Stack() {
-      Column() {
-        Row({ space: 8 }) {
-          Button('返回')
-            .fontSize(12)
-            .height(32)
-            .backgroundColor(getTheme(this.isDark).accentBg)
-            .fontColor(getTheme(this.isDark).accent)
-            .onClick(() => {
-              router.back();
-            })
+    NavDestination() {
+      Stack() {
+        Column() {
+          Row({ space: 8 }) {
+            Button('返回')
+              .fontSize(12)
+              .height(32)
+              .backgroundColor(getTheme(this.isDark).accentBg)
+              .fontColor(getTheme(this.isDark).accent)
+              .onClick(() => {
+                AppNavigator.getInstance().pop();
+              })
           Text('云端收藏夹')
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
@@ -509,5 +479,23 @@ struct FavoritesPage {
     }
     .width('100%')
     .height('100%')
+    }
+    .hideTitleBar(true)
+    .onShown(() => {
+      if (this.hasLoadedOnce && CookieStore.getInstance().hasCookie() && !this.loading) {
+        this.loadGroups();
+      }
+    })
+    .onBackPressed(() => {
+      if (this.deleteTarget !== null) {
+        this.deleteTarget = null;
+        return true;
+      }
+      if (this.showGroupModal) {
+        this.showGroupModal = false;
+        return true;
+      }
+      return false;
+    })
   }
 }

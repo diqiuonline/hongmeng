@@ -1,15 +1,5 @@
 {
   "src": [
-    "pages/Index",
-    "pages/ForumPage",
-    "pages/ThreadPage",
-    "pages/LoginPage",
-    "pages/SettingsPage",
-    "pages/SearchPage",
-    "pages/FavoritesPage",
-    "pages/FavoriteDetailPage",
-    "pages/UserProfilePage",
-    "pages/ComposePage",
-    "pages/NotificationsPage"
+    "pages/Index"
   ]
 }

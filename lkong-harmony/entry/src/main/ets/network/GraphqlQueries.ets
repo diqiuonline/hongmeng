@@ -56,6 +56,15 @@ export const VIEW_HOT_THREADS_QUERY = `query ViewHotThreads {
   }
 }`;
 
+export const VIEW_FORUM_HOT_THREADS_QUERY = `query ViewForumHotThreads($fid: Int!) {
+  hots: threadsFragment(fid: $fid, type: "hot") {
+    tid
+    title
+    author
+    authorid
+  }
+}`;
+
 export const THREAD_COMPONENT_FRAGMENT = `fragment threadComponent on Thread {
   tid
   title
@@ -229,6 +238,86 @@ export const VIEW_USER_THREADS_PAGE_QUERY = `query ViewUserThreadsPage($uid: Int
   }
 }
 ${THREAD_COMPONENT_FRAGMENT}`;
+
+export const MIX_POST_COMPONENT_FRAGMENT = `fragment MixPostComponent on MixPost {
+  authorid
+  author {
+    uid
+    name
+    avatar
+  }
+  dateline
+  content
+  pid
+  __typename
+  ... on MajorPost {
+    thread {
+      tid
+      title
+      replies
+      fid
+      forumName
+    }
+  }
+  ... on MajorReply {
+    thread {
+      tid
+      title
+      authorid
+      author {
+        uid
+        name
+      }
+    }
+  }
+  ... on MinorPost {
+    quote {
+      pid
+      author {
+        uid
+        name
+      }
+      content
+    }
+    thread {
+      tid
+      fid
+    }
+  }
+  ... on MajorBookReview {
+    thread {
+      tid
+      replies
+    }
+    score
+    book {
+      bid
+      title
+      author
+    }
+  }
+  ... on MajorBookReviewReply {
+    thread {
+      tid
+      title
+      author {
+        uid
+        name
+      }
+    }
+    book {
+      bid
+      title
+    }
+  }
+}`;
+
+export const VIEW_USER_POSTS_PAGE_QUERY = `query ViewUserContentsPage($uid: Int!, $isDigest: Boolean!, $page: Int) {
+  content: userReplies(uid: $uid, isDigest: $isDigest, page: $page) {
+    ...MixPostComponent
+  }
+}
+${MIX_POST_COMPONENT_FRAGMENT}`;
 
 export const VIEW_USER_FAVORITE_GROUPS_QUERY = `query ViewUserFavoriteGroups($uid: Int!) {
   content: userFavoriteGroupList(uid: $uid) {
@@ -526,5 +615,98 @@ export const VIEW_FANS_NOTICE_QUERY = `query ViewFansNotice($date: Date) {
     }
     hasMore
     nextDate
+  }
+}`;
+
+export const TWO_WAY_LOGIN_MUTATION = `mutation TwoWayLogin($twoWay: String!, $code: String!, $serverTime: String!) {
+  twoWaylogin(twoWay: $twoWay, code: $code, serverTime: $serverTime) {
+    uid
+    name
+  }
+}`;
+
+export const BASE_POST_QUERY = `query BasePost($tid: Int!, $pid: String!) {
+  thread(tid: $tid) {
+    title
+    first
+  }
+  post(tid: $tid, pid: $pid) {
+    pid
+    content
+    authorid
+    lock
+  }
+}`;
+
+export const EDIT_POST_MUTATION = `mutation EditPost($tid: Int!, $pid: String!, $content: String!, $title: String) {
+  editPost(tid: $tid, pid: $pid, content: $content, title: $title) {
+    ok
+    link
+  }
+}`;
+
+export const FOLLOW_USER_MUTATION = `mutation FollowUser($uid: Int!, $follow: Boolean!) {
+  followUser(uid: $uid, follow: $follow) {
+    ok
+  }
+}`;
+
+export const VIEW_LAST_USERS_MESSAGES_QUERY = `query ViewLastUsersMessages($date: Date) {
+  lastUsersMessages(date: $date) {
+    data: messages {
+      user {
+        uid
+        name
+        avatar
+      }
+      lastTime
+      newCount
+      content
+    }
+    hasMore
+    nextDate
+  }
+}`;
+
+export const DEL_USER_MESSAGE_MUTATION = `mutation DelUserMessage($toUid: Int!) {
+  delUserMessage(toUid: $toUid) {
+    ok
+  }
+}`;
+
+export const VIEW_USER_MESSAGES_QUERY = `query ViewUserMessages($uid: Int!, $date: Date) {
+  userMessages(touid: $uid, date: $date) {
+    data: messages {
+      content
+      dateline
+      id
+      uid
+    }
+    hasMore
+    nextDate
+  }
+}`;
+
+export const SEND_MESSAGE_MUTATION = `mutation SendMessage($uid: Int!, $content: String!) {
+  sendMessage(toUid: $uid, content: $content) {
+    content
+    dateline
+    id
+    uid
+  }
+}`;
+
+export const SEND_IMAGE_MESSAGE_MUTATION = `mutation SendImageMessage($uid: Int!, $imageKey: String!) {
+  sendImageMessage(toUid: $uid, imageKey: $imageKey) {
+    content
+    dateline
+    id
+    uid
+  }
+}`;
+
+export const DEL_MESSAGE_MUTATION = `mutation DelMessage($uid: Int!, $id: String!) {
+  delMessage(toUid: $uid, contentid: $id) {
+    ok
   }
 }`;

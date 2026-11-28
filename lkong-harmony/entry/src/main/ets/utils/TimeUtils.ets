@@ -39,3 +39,24 @@ function formatDate(date: Date): string {
   const day = `${date.getDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
+/**
+ * 返回本地日历日期键（YYYY-MM-DD），用于自动签到跨天判断。
+ */
+export function getLocalDateKey(date?: Date): string {
+  const target = date !== undefined ? date : new Date();
+  const year = target.getFullYear();
+  const month = `${target.getMonth() + 1}`.padStart(2, '0');
+  const day = `${target.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * 返回本地时分文本（HH:mm），用于自动签到记录展示。
+ */
+export function formatClockTime(date?: Date): string {
+  const target = date !== undefined ? date : new Date();
+  const hour = `${target.getHours()}`.padStart(2, '0');
+  const minute = `${target.getMinutes()}`.padStart(2, '0');
+  return `${hour}:${minute}`;
+}
