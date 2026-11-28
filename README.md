@@ -6,10 +6,16 @@
 
 ## 1. 项目一览
 
-| 目录 | 应用名称 | 包名（`bundleName`） | 当前版本 | 简介 | 文档 |
-|---|---|---|---|---|---|
-| `lkong-harmony/` | 龙空 HarmonyOS 客户端 | `com.nihaoa.lkong` | `1.5.0`（`1005000`） | 龙的天空论坛非官方原生客户端，基于官方 GraphQL API 实现首页/版块/主页/通知全站多 Tab 左右滑动、版块排序与今日热门、每日自动签到、综合搜索、云端收藏夹、富文本/动态表情/图片渲染与保存、发帖/回帖/编辑/传图、龙币评分、个人帖子详情与站内私信 | [详细文档](./lkong-harmony/README.md) · [更新日志](./lkong-harmony/CHANGELOG.md) |
-| `deepseek/` | AI 对话助手 | `com.nihaoa.aichat` | `1.0.0`（`1000000`） | 原生第三方 AI 对话客户端，直连网页端协议，支持纯 ArkTS + `taskpool` 并行求解 `DeepSeekHashV1` PoW、流式 SSE JSON-Patch 解析、多分支消息树、Markdown / 代码块 / LaTeX 公式渲染及图片/文档 OCR 上传 | [详细文档](./deepseek/README.md) |
+| 项目 | 目录 | 包名 | 版本 | 文档 |
+|---|---|---|---|---|
+| **龙空 HarmonyOS 客户端** | [`lkong-harmony/`](./lkong-harmony/) | `com.nihaoa.lkong` | `1.5.0` | [README](./lkong-harmony/README.md) · [更新日志](./lkong-harmony/CHANGELOG.md) |
+| **AI 对话助手** | [`deepseek/`](./deepseek/) | `com.nihaoa.aichat` | `1.0.0` | [README](./deepseek/README.md) |
+
+### 龙空 HarmonyOS 客户端
+龙的天空论坛非官方原生客户端（API 26 / ArkTS），基于官方 GraphQL API 实现：首页 / 版块 / 主页 / 通知全站多 Tab 左右滑动、版块排序与今日热门、每日自动签到、综合搜索、云端收藏夹、富文本 / 动态表情 / 图片混排与缩放保存、发帖 / 回帖 / 编辑 / 传图、龙币评分、个人帖子详情与站内私信。详细说明见 [lkong-harmony/README.md](./lkong-harmony/README.md) 与 [更新日志](./lkong-harmony/CHANGELOG.md)。
+
+### AI 对话助手
+原生第三方 AI 对话客户端，直连网页端协议，支持纯 ArkTS + `taskpool` 并行求解 `DeepSeekHashV1` PoW、流式 SSE JSON-Patch 解析、多分支消息树、Markdown / 代码块 / LaTeX 公式渲染及图片 / 文档 OCR 上传。详细说明见 [deepseek/README.md](./deepseek/README.md)。
 
 ---
 
